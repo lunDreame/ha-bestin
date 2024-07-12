@@ -1,0 +1,28 @@
+{
+    "title": "BESTIN",
+    "config": {
+        "step": {
+            "user": {
+                "description": "소켓이나 시리얼 통신에 대한 정보를 기입해 주세요.",
+                "data": {
+                    "host": "소켓(192.168.x.x) 또는 시리얼(/dev/ttyXXX)",
+                    "port": "소켓 전용(기본값=8899)"
+                }
+            }
+        },
+        "abort": {
+            "single_instance_allowed": "BESTIN은 단일 구성만 가능합니다."
+        },
+        "error": {
+            "unknown": "알 수 없는 오류가 발생했습니다."
+        },
+        "options": {
+            "step": {
+                "init": {
+                    "title": "",
+                    "data": {}
+                }
+            }
+        }
+    }
+}
