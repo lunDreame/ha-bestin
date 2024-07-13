@@ -71,12 +71,12 @@ class BestinLight(BestinDevice, LightEntity):
     @property
     def is_on(self):
         """Return true if switch is on."""
-        return self._device.device_state
+        return self._device.state
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""
-        self._set_command(True)
+        self._on_command(True)
 
     async def async_turn_off(self, **kwargs):
         """Turn off light."""
-        self._set_command(False)
+        self._on_command(False)

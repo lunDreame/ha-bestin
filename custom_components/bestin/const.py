@@ -12,7 +12,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 LOGGER = logging.getLogger(__package__)
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -28,7 +28,7 @@ DEVICE_LIGHT = "light"
 DEVICE_OUTLET = "outlet"
 DEVICE_THERMOSTAT = "thermostat"
 
-MAIN_DEVICE_LIST = [
+MAIN_DEVICES = [
     DEVICE_DOORLOCK,
     DEVICE_FAN,
     DEVICE_GAS,
@@ -110,7 +110,7 @@ NEW_LIGHT = "lights"
 NEW_SENSOR = "sensors"
 NEW_SWITCH = "switchs"
 
-NEW_DEVICE_TYPE = {
+DEVICE_TYPE_MAP = {
     DEVICE_CONSUMPTION: NEW_SENSOR,
     DEVICE_CUTOFF: NEW_SWITCH,
     DEVICE_DOORLOCK: NEW_SWITCH,
@@ -122,7 +122,7 @@ NEW_DEVICE_TYPE = {
     DEVICE_THERMOSTAT: NEW_CLIMATE,
 }
 
-DEVICE_PLATFORM_TYPE = {
+DEVICE_PLATFORM_MAP = {
     DEVICE_CONSUMPTION: Platform.SENSOR,
     DEVICE_CUTOFF: Platform.SWITCH,
     DEVICE_DOORLOCK: Platform.SWITCH,
@@ -142,11 +142,8 @@ PLATFORMS = [
     Platform.SWITCH,
 ]
 
-PRESET_ECO = "eco"
 PRESET_NATURAL = "natural"
 PRESET_NONE = "none"
-PRESET_RESERVATION = "reservation"
-PRESET_SLEEP = "sleep"
 
 SPEED_HIGH = 3
 SPEED_LOW = 1

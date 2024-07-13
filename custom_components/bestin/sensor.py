@@ -78,7 +78,7 @@ class BestinSensor(BestinDevice):
                 factor = factor[0] 
             else:
                 factor = factor[1]
-        return factor(self._device.device_state)
+        return factor(self._device.state)
     
     @property
     def device_class(self):

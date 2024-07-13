@@ -24,11 +24,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         await gateway.async_initialize_gateway()
         
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
+        config_entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
+        )
     else:
         LOGGER.debug("Gateway connection failed")
         hass.data[DOMAIN][config_entry.entry_id].shutdown()
+        
         hass.data[DOMAIN].pop(config_entry.entry_id)
+        return False
 
     return True
 
@@ -36,7 +40,9 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
     """Unload the BESTIN integration."""
     hass.data[DOMAIN][config_entry.entry_id].shutdown()
 
-    await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)
-    hass.data[DOMAIN].pop(config_entry.entry_id)
+    if unload_ok := await hass.config_entries.async_unload_platforms(
+        config_entry, PLATFORMS
+    ):
+        hass.data[DOMAIN].pop(config_entry.entry_id)
 
-    return True
+    return unload_ok

@@ -3,25 +3,24 @@
     "config": {
         "step": {
             "user": {
-                "description": "소켓이나 시리얼 통신에 대한 정보를 기입해 주세요.",
                 "data": {
-                    "host": "소켓(192.168.x.x) 또는 시리얼(/dev/ttyXXX)",
-                    "port": "소켓 전용(기본값=8899)"
+                    "host": "호스트",
+                    "port": "포트"
+                },
+                "data_description": {
+                    "port": "직렬 통신인 경우 포트는 생략할 수 있습니다."
                 }
             }
         },
         "abort": {
-            "single_instance_allowed": "BESTIN은 단일 구성만 가능합니다."
+            "single_instance_allowed": "단일 구성만 가능합니다."
         },
         "error": {
-            "unknown": "알 수 없는 오류가 발생했습니다."
+            "unknown": "알 수 없는 오류"
         },
         "options": {
             "step": {
-                "init": {
-                    "title": "",
-                    "data": {}
-                }
+                "init": {}
             }
         }
     }

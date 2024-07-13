@@ -1,10 +1,9 @@
-import traceback
-import asyncio
 import re
+import time
+import asyncio
+import traceback
 import serial # type: ignore
 import socket
-import time
-from typing import Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
@@ -204,9 +203,9 @@ class BestinGateway:
         self.config_entry = config_entry
         self.api: BestinController = None
         self.connection: SerialSocketCommunicator = None
-        self.gateway_mode: tuple[str, Optional[dict]] = None
-        self.entities = {}
-        self.listeners = []
+        self.gateway_mode: tuple = None
+        self.entities: dict = {}
+        self.listeners: list = []
 
     @property
     def host(self) -> str:
@@ -314,9 +313,9 @@ class BestinGateway:
 
     async def async_update_device_registry(self):
         """Create or update device entry in Home Assistant registry."""
-        device_registry = self.hass.helpers.device_registry.async_get(self.hass)
-
-        device = device_registry.async_get_or_create(
+        device_registry = await self.hass.helpers.device_registry.async_get_registry()
+        
+        device_registry.async_get_or_create(
             config_entry_id=self.config_entry.entry_id,
             connections={(DOMAIN, self.host)},
             identifiers={(DOMAIN, self.host)},
@@ -326,7 +325,6 @@ class BestinGateway:
             sw_version=self.version,
             via_device=(DOMAIN, self.host),
         )
-        self.dr_id = device.id
         
     @callback
     def async_signal_new_device(self, device_type: str) -> str:
@@ -345,7 +343,7 @@ class BestinGateway:
         self, device_type, device=None, force: bool = False
     ) -> None:
         """Add device callback if not already registered."""
-        domain = device.platform_type
+        domain = device.platform
         unique_id = device.unique_id
 
         if (

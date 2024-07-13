@@ -3,25 +3,24 @@
     "config": {
         "step": {
             "user": {
-                "description": "Please fill in the information of the socket or serial communication.",
                 "data": {
-                    "host": "Socket (192.168.x.x) or Serial (/dev/ttyXXX)",
-                    "port": "For Sockets Only (default=8899)"
+                    "host": "Host",
+                    "port": "Port"
+                },
+                "data_description": {
+                    "port": "If using serial communication, the port can be omitted."
                 }
             }
         },
         "abort": {
-            "single_instance_allowed": "Only a single configuration of BESTIN is possible."
+            "single_instance_allowed": "Only a single configuration is allowed."
         },
         "error": {
-            "unknown": "Unknown error occurred."
+            "unknown": "Unknown error"
         },
         "options": {
             "step": {
-                "init": {
-                    "title": "",
-                    "data": {}
-                }
+                "init": {}
             }
         }
     }

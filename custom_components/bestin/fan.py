@@ -76,7 +76,7 @@ class BestinFan(BestinDevice, FanEntity):
     @property
     def is_on(self) -> bool:
         """Return true if fan is on."""
-        return self._device.device_state["state"]
+        return self._device.state["state"]
 
     @property
     def supported_features(self) -> int:
@@ -87,7 +87,7 @@ class BestinFan(BestinDevice, FanEntity):
     def percentage(self) -> Optional[int]:
         """Return the current speed percentage."""
         return ordered_list_item_to_percentage(
-            self._speed_list, self._device.device_state["speed"]
+            self._speed_list, self._device.state["speed"]
         )
 
     @property
@@ -101,12 +101,12 @@ class BestinFan(BestinDevice, FanEntity):
             percentage_to_ordered_list_item(self._speed_list, percentage)
             if percentage > 0 else 0
         )
-        self._set_command(speed=speed)
+        self._on_command(speed=speed)
 
     @property
     def preset_mode(self):
         """Return the preset mode."""
-        return self._device.device_state["preset"]
+        return self._device.state["preset"]
 
     @property
     def preset_modes(self) -> list:
@@ -115,7 +115,7 @@ class BestinFan(BestinDevice, FanEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the preset mode of the fan."""
-        self._set_command(
+        self._on_command(
             preset=False if preset_mode == PRESET_NONE else preset_mode
         )
 
@@ -127,8 +127,8 @@ class BestinFan(BestinDevice, FanEntity):
         **kwargs: Any,
     ) -> None:
         """Turn on fan."""
-        self._set_command(True)
+        self._on_command(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off fan."""
-        self._set_command(False)
+        self._on_command(False)

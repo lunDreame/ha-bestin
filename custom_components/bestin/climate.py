@@ -7,9 +7,6 @@ from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
-    PRESET_NONE,
-    PRESET_ECO,
-    PRESET_SLEEP,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
@@ -17,7 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import LOGGER, NEW_CLIMATE, PRESET_RESERVATION
+from .const import LOGGER, NEW_CLIMATE
 from .device import BestinDevice
 from .gateway import load_gateway_from_entry
 
@@ -65,9 +62,8 @@ class BestinClimate(BestinDevice, ClimateEntity):
         self._supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
         self._supported_features |= ClimateEntityFeature.TURN_ON
         self._supported_features |= ClimateEntityFeature.TURN_OFF
-        self._supported_features |= ClimateEntityFeature.PRESET_MODE
         self._hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
-        self._preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_SLEEP, PRESET_RESERVATION]
+        self._preset_modes = []
 
     @property
     def supported_features(self):
@@ -80,7 +76,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
         Need to be one of HVAC_MODE_*.
         """
-        return self._device.device_state["mode"]
+        return self._device.state["mode"]
 
     @property
     def hvac_modes(self) -> list:
@@ -97,14 +93,13 @@ class BestinClimate(BestinDevice, ClimateEntity):
         """Set new target hvac mode."""
         if hvac_mode not in self.hvac_modes:
             raise ValueError(f"Unsupported HVAC mode {hvac_mode}")
-        self._set_command(mode=True if hvac_mode == HVACMode.HEAT else False)
+        self._on_command(mode=True if hvac_mode == HVACMode.HEAT else False)
 
     @property
     def preset_mode(self):
         """Return the current preset mode, e.g., home, away, temp.
         Requires ClimateEntityFeature.PRESET_MODE.
         """
-        return self._device.device_state["preset"]
 
     @property
     def preset_modes(self) -> list:
@@ -113,9 +108,6 @@ class BestinClimate(BestinDevice, ClimateEntity):
  
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
-        self._set_command(
-            preset=False if preset_mode == PRESET_NONE else preset_mode
-        )
 
     @property
     def hvac_action(self):
@@ -124,18 +116,18 @@ class BestinClimate(BestinDevice, ClimateEntity):
     @property
     def current_temperature(self) -> float:
         """Return the current temperature."""
-        return self._device.device_state["current_temperature"]
+        return self._device.state["current_temperature"]
 
     @property
     def target_temperature(self) -> float:
         """Return the target temperature."""
-        return self._device.device_state["target_temperature"]
+        return self._device.state["target_temperature"]
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
         if ATTR_TEMPERATURE not in kwargs:
             raise ValueError(f"Expected attribute {ATTR_TEMPERATURE}")
-        self._set_command(set_temperature=(float(kwargs[ATTR_TEMPERATURE])))
+        self._on_command(set_temperature=(float(kwargs[ATTR_TEMPERATURE])))
 
     @property
     def temperature_unit(self) -> UnitOfTemperature:
