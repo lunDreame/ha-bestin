@@ -1,5 +1,7 @@
 """The BESTIN component."""
 
+from __future__ import annotations
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
@@ -13,6 +15,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the BESTIN integration."""
     return True
 
+
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up the BESTIN integration."""
     gateway: BestinGateway = BestinGateway(hass, config_entry)
@@ -20,29 +23,39 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     if connected := gateway.connect():
         LOGGER.debug(f"Gateway connected: {connected} (Host: {gateway.host})")
+        
         await gateway.async_load_entity_registry()
         await gateway.async_initialize_gateway()
         
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+
         config_entry.async_on_unload(
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
         )
+        config_entry.async_on_unload(
+            config_entry.add_update_listener(_async_update_listener)
+        )
     else:
         LOGGER.debug("Gateway connection failed")
-        hass.data[DOMAIN][config_entry.entry_id].shutdown()
         
+        hass.data[DOMAIN][config_entry.entry_id].shutdown()
         hass.data[DOMAIN].pop(config_entry.entry_id)
         return False
 
     return True
 
+
+async def _async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(config_entry.entry_id)
+
+
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload the BESTIN integration."""
-    hass.data[DOMAIN][config_entry.entry_id].shutdown()
-
     if unload_ok := await hass.config_entries.async_unload_platforms(
         config_entry, PLATFORMS
     ):
+        hass.data[DOMAIN][config_entry.entry_id].shutdown()
         hass.data[DOMAIN].pop(config_entry.entry_id)
 
     return unload_ok

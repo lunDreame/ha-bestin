@@ -1,6 +1,7 @@
 """Fan platform for BESTIN"""
 
 from __future__ import annotations
+
 from typing import Any, Optional
 
 from homeassistant.components.fan import (

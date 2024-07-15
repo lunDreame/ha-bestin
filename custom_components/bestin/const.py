@@ -12,11 +12,14 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 LOGGER = logging.getLogger(__package__)
 SCAN_INTERVAL = timedelta(seconds=60)
+
 DEFAULT_PORT = 8899
+DEFAULT_MAX_TRANSMISSIONS = 20
+DEFAULT_TRANSMISSION_INTERVAL = 185
 
 DEVICE_CONSUMPTION = "outlet:consumption"
 DEVICE_CUTOFF = "outlet:cutoff"

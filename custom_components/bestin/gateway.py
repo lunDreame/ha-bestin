@@ -80,7 +80,8 @@ class SerialSocketCommunicator:
             return False
 
     def reconnect(self):
-        self.connection = None
+        if self.connection is not None:
+            self.connection.close()
 
         current_time = time.time()
         if self.next_attempt_time and current_time < self.next_attempt_time:
@@ -165,7 +166,7 @@ class SerialSocketCommunicator:
                     packet_length = packet[2]
                 
                 if packet_length <= 0:
-                    LOGGER.error("Invalid packet length in packet.")
+                    LOGGER.error(f"Invalid packet length in packet. {packet.hex()}")
                     return b''
 
                 packet += recv_exactly(packet_length - len(packet))

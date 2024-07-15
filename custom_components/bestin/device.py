@@ -1,9 +1,14 @@
 """Base class for BESTIN devices."""
+
+from __future__ import annotations
+
 from typing import Any
+
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.core import callback
 
 from .const import DOMAIN, LOGGER, MAIN_DEVICES
+
 
 def split_dt(dt: str) -> str:
     """
@@ -81,7 +86,8 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
-        self.gateway.entities[self.TYPE].remove(self.unique_id)
+        if self.unique_id in self.gateway.hass.data[DOMAIN]:
+            self.gateway.entities[self.TYPE].remove(self.unique_id)
         self._device.on_remove(self.unique_id)
 
     @callback

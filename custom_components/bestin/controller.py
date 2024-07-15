@@ -13,6 +13,8 @@ from homeassistant.const import Platform
 from .const import (
     DOMAIN,
     LOGGER,
+    DEFAULT_MAX_TRANSMISSIONS,
+    DEFAULT_TRANSMISSION_INTERVAL,
     ELEMENT_BYTE_RANGE,
     DEVICE_TYPE_MAP,
     DEVICE_PLATFORM_MAP,
@@ -49,7 +51,7 @@ class BestinController:
         async_add_device,
     ) -> None:
         self.hass = hass
-        self.entry = config_entry
+        self.config_entry = config_entry
         self.entities = entities
         self.host = host
         self.connection = connection
@@ -80,7 +82,7 @@ class BestinController:
         """Send packet data to the connection."""
         if self.available:
             self.connection.send(packet)
-    
+
     def start(self):
         """process_thread Starts threading."""
         self.process_thread.start()
@@ -529,6 +531,10 @@ class BestinController:
 
     def send_packet_queue(self, queue: dict[str, Any]) -> None:
         """Sends queued command packet data."""
+        transmission_interval = self.config_entry.options.get(
+            "transmission_interval", DEFAULT_TRANSMISSION_INTERVAL
+        ) / 1000
+
         LOGGER.info(
             "Send the %s command of the %s device. command Packet: %s, attempts: %s",
             queue["value"],
@@ -537,7 +543,7 @@ class BestinController:
             queue["attempt"],
         )
         queue["attempt"] += 1
-        time.sleep(0.185)
+        time.sleep(transmission_interval)
         self.send_data(queue["command"])
 
     def parse_packet_data(self, packet: bytes) -> None:
@@ -581,9 +587,12 @@ class BestinController:
                 device_id = f"{device_type}_{room_id}"
                 self.setup_device(device_id, device_state)
 
-    def process_packet_queue(self, max_attempt=20) -> None:
+    def process_packet_queue(self) -> None:
         """Processes queued command packet data."""
         queue = self.packet_queue.queue[0]
+        max_transmissions = self.config_entry.options.get(
+            "max_transmissions", DEFAULT_MAX_TRANSMISSIONS
+        )
         self.send_packet_queue(queue)
 
         if resp := queue["resp"]:
@@ -596,10 +605,10 @@ class BestinController:
             )
             self.packet_queue.get()
 
-        elif queue["attempt"] > max_attempt:
+        elif queue["attempt"] > max_transmissions:
             LOGGER.info(
                 "Command for %s device exceeded %s attempts, cancelling operation",
-                queue["device_type"], max_attempt
+                queue["device_type"], max_transmissions
             )
             self.packet_queue.get()
 
