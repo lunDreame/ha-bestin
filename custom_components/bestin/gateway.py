@@ -80,7 +80,8 @@ class SerialSocketCommunicator:
             return False
 
     def reconnect(self):
-        self.connection = None
+        if self.connection is not None:
+            self.connection.close()
 
         current_time = time.time()
         if self.next_attempt_time and current_time < self.next_attempt_time:
