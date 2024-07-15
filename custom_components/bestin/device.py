@@ -1,9 +1,14 @@
 """Base class for BESTIN devices."""
+
+from __future__ import annotations
+
 from typing import Any
+
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.core import callback
 
 from .const import DOMAIN, LOGGER, MAIN_DEVICES
+
 
 def split_dt(dt: str) -> str:
     """

@@ -19,7 +19,7 @@ import homeassistant.helpers.config_validation as cv
 from .const import (
     DEFAULT_PORT,
     DEFAULT_MAX_TRANSMISSIONS,
-    DEFAULT_TRANSMISSIONS_INTERVAL,
+    DEFAULT_TRANSMISSION_INTERVAL,
     DOMAIN, 
     LOGGER
 )
@@ -92,22 +92,28 @@ class OptionsFlowHandler(OptionsFlow):
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle options flow."""
+        errors = {}
+
         if self.config_entry.source == SOURCE_IMPORT:
-            return self.async_show_form(step_ip="init", data_schema=None)
+            return self.async_show_form(step_id="init", data_schema=None)
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
+        data_schema = {
+            vol.Required("max_transmissions",
+                default=self.config_entry.options.get(
+                    "max_transmissions", DEFAULT_MAX_TRANSMISSIONS
+                )
+            ): ConfigFlow.int_between(1, 50),
+            vol.Required("transmission_interval",
+                default=self.config_entry.options.get(
+                    "transmission_interval", DEFAULT_TRANSMISSION_INTERVAL
+                )
+            ): ConfigFlow.int_between(100, 250),
+        }
+
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required("max_transmissions",
-                    default=self.config_entry.options.get(
-                        "max_transmissions", DEFAULT_MAX_TRANSMISSIONS
-                ): ConfigFlow.int_between(1, 50),
-                vol.Required("transmission_interval",
-                    default=self.config_entry.options.get(
-                        "transmission_interval", DEFAULT_TRANSMISSIONS_INTERVAL
-                ): ConfigFlow.int_between(100, 250),
-            }),
-            errors={},
+            data_schema=vol.Schema(data_schema),
+            errors=errors,
         )

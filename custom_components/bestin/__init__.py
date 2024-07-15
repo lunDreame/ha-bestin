@@ -28,8 +28,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         await gateway.async_initialize_gateway()
         
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+
         config_entry.async_on_unload(
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
+        )
+        config_entry.async_on_unload(
+            config_entry.add_update_listener(_async_update_listener)
         )
     else:
         LOGGER.debug("Gateway connection failed")
@@ -39,6 +43,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         return False
 
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(config_entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:

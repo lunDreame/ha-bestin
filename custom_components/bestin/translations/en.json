@@ -20,7 +20,13 @@
         },
         "options": {
             "step": {
-                "init": {}
+                "init": {
+                    "title": "Adjust User Options",
+                    "data": {
+                        "max_transmissions": "Max Transmissions",
+                        "transmission_interval": "Transmission Interval"
+                    }
+                }
             }
         }
     }
