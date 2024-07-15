@@ -13,6 +13,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
     SOURCE_IMPORT,
 )
+from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_PORT
 import homeassistant.helpers.config_validation as cv
 
