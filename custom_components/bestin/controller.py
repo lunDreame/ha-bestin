@@ -51,7 +51,7 @@ class BestinController:
         async_add_device,
     ) -> None:
         self.hass = hass
-        self.entry = config_entry
+        self.config_entry = config_entry
         self.entities = entities
         self.host = host
         self.connection = connection
