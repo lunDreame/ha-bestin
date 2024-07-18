@@ -2,7 +2,7 @@ import re
 import time
 import asyncio
 import traceback
-import serial # type: ignore
+import serial_asyncio
 import socket
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_registry import async_entries_for_config_entry
 
 from .const import (
     DOMAIN,
+    VERSION,
     LOGGER,
     NAME,
     NEW_CLIMATE,
@@ -20,7 +21,6 @@ from .const import (
     NEW_LIGHT,
     NEW_SENSOR,
     NEW_SWITCH,
-    VERSION,
 )
 from .controller import BestinController
 
@@ -30,7 +30,8 @@ class SerialSocketCommunicator:
         self.conn_str = conn_str
         self.is_serial = False
         self.is_socket = False
-        self.connection = None
+        self.reader = None
+        self.writer = None
         self.reconnect_attempts = 0
         self.last_reconnect_attempt = None
         self.next_attempt_time = None
@@ -47,45 +48,44 @@ class SerialSocketCommunicator:
         else:
             raise ValueError("Invalid connection string")
 
-    def connect(self):
+    async def connect(self):
         try:
             if self.is_serial:
-                self._connect_serial()
+                await self._connect_serial()
             elif self.is_socket:
-                self._connect_socket()
+                await self._connect_socket()
             self.reconnect_attempts = 0
             LOGGER.info("Connection established successfully.")
         except Exception as e:
             LOGGER.error(f"Connection failed: {e}")
-            self.reconnect()
+            await self.reconnect()
 
-    def _connect_serial(self):
-        self.connection = serial.Serial(self.conn_str, baudrate=9600, timeout=30)
+    async def _connect_serial(self):
+        self.reader, self.writer = await serial_asyncio.open_serial_connection(url=self.conn_str, baudrate=9600)
         LOGGER.info(f"Serial connection established on {self.conn_str}")
 
-    def _connect_socket(self):
+    async def _connect_socket(self):
         host, port = self.conn_str.split(':')
-        self.connection = socket.socket()
-        self.connection.settimeout(10)
-        self.connection.connect((host, int(port)))
+        self.reader, self.writer = await asyncio.open_connection(host, int(port))
         LOGGER.info(f"Socket connection established to {host}:{port}")
 
     def is_connected(self):
         try:
             if self.is_serial:
-                return self.connection.is_open
+                return self.writer is not None and not self.writer.transport.is_closing()
             elif self.is_socket:
-                return self.connection is not None
-        except socket.error:
+                return self.writer is not None
+        except Exception:
             return False
 
-    def reconnect(self):
-        if self.connection is not None:
-            self.connection.close()
+    async def reconnect(self):
+        if self.writer is not None:
+            self.writer.close()
+            await self.writer.wait_closed()
 
         current_time = time.time()
         if self.next_attempt_time and current_time < self.next_attempt_time:
-            return
+            return False
         
         self.reconnect_attempts += 1
         delay = min(2 ** self.reconnect_attempts, 60) if self.last_reconnect_attempt else 1
@@ -93,43 +93,40 @@ class SerialSocketCommunicator:
         self.next_attempt_time = current_time + delay
         LOGGER.info(f"Reconnection attempt {self.reconnect_attempts} after {delay} seconds delay...")
 
-        self.connect()
+        await asyncio.sleep(delay)
+        await self.connect()
         if self.is_connected():
             LOGGER.info(f"Successfully reconnected on attempt {self.reconnect_attempts}.")
             self.reconnect_attempts = 0
             self.next_attempt_time = None
 
-    def send(self, packet):
+    async def send(self, packet):
         try:
-            if self.is_serial:
-                self.connection.write(packet)
-            elif self.is_socket:
-                self.connection.send(packet)
+            self.writer.write(packet)
+            await self.writer.drain()
+            await asyncio.sleep(0.1)
         except Exception as e:
             LOGGER.error(f"Failed to send packet data: {e}")
-            self.reconnect()
+            await self.reconnect()
 
-    def receive(self, size=64):
+    async def receive(self, size=64):
         try:
-            if self.is_serial:
-                return self.connection.read(size)
-            elif self.is_socket:
-                if self.chunk_size == size:
-                    return self._receive_socket()
-                else:
-                    return self.connection.recv(size)
-        except socket.timeout:
+            if self.chunk_size == size: 
+                return await self._receive_socket()
+            else:
+                return await self.reader.read(size)
+        except asyncio.TimeoutError:
             pass
         except Exception as e:
             LOGGER.error(f"Failed to receive packet data: {e}")
-            self.reconnect()
+            await self.reconnect()
             return None
 
-    def _receive_socket(self):
-        def recv_exactly(n):
+    async def _receive_socket(self):
+        async def recv_exactly(n):
             data = b''
             while len(data) < n:
-                chunk = self.connection.recv(n - len(data))
+                chunk = await self.reader.read(n - len(data))
                 if not chunk:
                     raise socket.error("Connection closed")
                 data += chunk
@@ -139,7 +136,7 @@ class SerialSocketCommunicator:
         try:
             while True:
                 while True:
-                    initial_data = self.connection.recv(1)
+                    initial_data = await self.reader.read(1)
                     if not initial_data:
                         return b''  
                     packet += initial_data
@@ -148,7 +145,7 @@ class SerialSocketCommunicator:
                         packet = packet[start_index:]
                         break
                 
-                packet += recv_exactly(3 - len(packet))
+                packet += await recv_exactly(3 - len(packet))
                 
                 if (
                     packet[1] not in [0x28, 0x31, 0x41, 0x42, 0x61, 0xD1]
@@ -169,22 +166,23 @@ class SerialSocketCommunicator:
                     LOGGER.error(f"Invalid packet length in packet. {packet.hex()}")
                     return b''
 
-                packet += recv_exactly(packet_length - len(packet))
+                packet += await recv_exactly(packet_length - len(packet))
                 
                 if len(packet) >= packet_length:
                     return packet[:packet_length]
 
         except socket.error as e:
             LOGGER.error(f"Socket error: {e}")
-            self.reconnect()
+            await self.reconnect()
         
         return b''
     
-    def close(self):
-        if self.connection:
+    async def close(self):
+        if self.writer:
             LOGGER.info("Connection closed.")
-            self.connection.close()
-            self.connection = None
+            self.writer.close()
+            await self.writer.wait_closed()
+            self.writer = None
 
 
 @callback
@@ -258,7 +256,7 @@ class BestinGateway:
         aio_data = {}
         try:
             while len(b''.join(chunk_storage)) < 1024:
-                received_data = self.connection._receive_socket()
+                received_data = await self.connection._receive_socket()
                 if not received_data:
                     break
                 chunk_storage.append(received_data)
@@ -363,17 +361,17 @@ class BestinGateway:
             *args,
         )
     
-    def connect(self) -> bool:
+    async def connect(self) -> bool:
         """Establish a connection to the serial socket communicator."""
         if self.connection is None or not self.available:
             self.connection = SerialSocketCommunicator(self.conn_str)
         else:
-            self.connection.close()
-        self.connection.connect()
+            await self.connection.close()
+        await self.connection.connect()
         return self.available
     
     @callback
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         """Shut down the connection and clear entities."""
         LOGGER.debug(
             "A shutdown call detects the current entity: %s and listener: %s and removes them.",
@@ -384,10 +382,9 @@ class BestinGateway:
             for unique_id in list(entities):
                 self.hass.data[DOMAIN].pop(unique_id, None)
 
-        self.api.stop_event.set()
-        self.api.process_thread.join()
+        self.api.stop()
         if self.available:
-            self.connection.close()
+            await self.connection.close()
 
     async def async_initialize_gateway(self) -> None:
         """
@@ -405,9 +402,7 @@ class BestinGateway:
                 title=self.host,
                 data={**self.config_entry.data, "gateway_mode": self.gateway_mode},
             )
-            if not self.available:
-                raise Exception("Not connection")
-            
+
             self.api = BestinController(
                 self.hass,
                 self.config_entry,
@@ -418,10 +413,8 @@ class BestinGateway:
             )
             self.api.start()
         except Exception as ex:
+            self.api = None
             LOGGER.error(
-                "Failed to initialize Bestin gateway. Host: %s, Gateway Mode: %s. Error: %s. Traceback: %s",
-                self.host,
-                self.gateway_mode,
-                str(ex),
-                traceback.format_exc()
+                f"Failed to initialize Bestin gateway. Host: {self.host}, Gateway Mode: {self.gateway_mode}. "
+                f"Error: {str(ex)}. Traceback: {traceback.format_exc()}"
             )

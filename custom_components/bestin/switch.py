@@ -55,8 +55,8 @@ class BestinSwitch(BestinDevice, SwitchEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn on switch."""
-        self._on_command(True)
+        await self._on_command(True)
 
     async def async_turn_off(self, **kwargs):
         """Turn off switch."""
-        self._on_command(False)
+        await self._on_command(False)

@@ -12,14 +12,22 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 
 LOGGER = logging.getLogger(__package__)
 SCAN_INTERVAL = timedelta(seconds=60)
 
 DEFAULT_PORT = 8899
-DEFAULT_MAX_TRANSMISSIONS = 20
-DEFAULT_TRANSMISSION_INTERVAL = 185
+DEFAULT_SCAN_INTERVAL = 5
+DEFAULT_MAX_TRANSMISSION = 10
+
+# Fan
+SPEED_LOW = 1
+SPEED_MEDIUM = 2
+SPEED_HIGH = 3
+
+PRESET_NONE = "None"
+PRESET_NATURAL_VENTILATION = "Natural Ventilation"
 
 DEVICE_CONSUMPTION = "outlet:consumption"
 DEVICE_CUTOFF = "outlet:cutoff"
@@ -144,10 +152,3 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
-
-PRESET_NATURAL = "natural"
-PRESET_NONE = "none"
-
-SPEED_HIGH = 3
-SPEED_LOW = 1
-SPEED_MEDIUM = 2

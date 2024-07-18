@@ -60,9 +60,9 @@ class BestinBase:
                 "via_device": (DOMAIN, self.gateway.host),
             }
 
-    def _on_command(self, data: Any = None, **kwargs):
+    async def _on_command(self, data: Any = None, **kwargs):
         """Set commands for the device."""
-        self._device.on_command(self.unique_id, data, **kwargs)
+        await self._device.on_command(self.unique_id, data, **kwargs)
 
 
 class BestinDevice(BestinBase, RestoreEntity):
@@ -97,7 +97,7 @@ class BestinDevice(BestinBase, RestoreEntity):
     @callback
     def async_update_callback(self):
         """Update the device's state."""
-        self.schedule_update_ha_state()
+        self.async_schedule_update_ha_state()
 
     @property
     def available(self):

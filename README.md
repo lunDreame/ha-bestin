@@ -7,6 +7,7 @@ BESTIN 월패드 1.0/2.0 사용자들을 위한 통합
 문제가 있나요? [Issues](https://github.com/lunDreame/ha-bestin/issues) 탭에 작성해 주세요.
 
 - 테스트 중이며, 다양한 환경에서의 테스트 케이스가 필요합니다.
+- 시리얼 통신의 경우 테스트 되지 않았습니다.
 - 더 좋은 아이디어가 있나요? [Pull requests](https://github.com/lunDreame/ha-bestin/pulls)로 공유해 주세요!
 - 이 통합을 사용하면서 발생하는 문제에 대해서는 책임지지 않습니다.
 

@@ -75,8 +75,8 @@ class BestinLight(BestinDevice, LightEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""
-        self._on_command(True)
+        await self._on_command(True)
 
     async def async_turn_off(self, **kwargs):
         """Turn off light."""
-        self._on_command(False)
+        await self._on_command(False)

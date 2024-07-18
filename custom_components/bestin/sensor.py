@@ -18,7 +18,6 @@ from .const import (
 from .device import BestinDevice
 from .gateway import load_gateway_from_entry
 
-
 def extract_and_transform(identifier: str) -> str:
     if "energy_" in identifier:
         extracted_segment = identifier.split("energy_")[1].split("-")[0]

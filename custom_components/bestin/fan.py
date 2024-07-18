@@ -21,11 +21,11 @@ from homeassistant.util.percentage import (
 from .const import (
     LOGGER,
     NEW_FAN,
-    PRESET_NATURAL,
-    PRESET_NONE,
-    SPEED_HIGH,
     SPEED_LOW,
     SPEED_MEDIUM,
+    SPEED_HIGH,
+    PRESET_NATURAL_VENTILATION,
+    PRESET_NONE,
 )
 from .device import BestinDevice
 from .gateway import load_gateway_from_entry
@@ -72,7 +72,7 @@ class BestinFan(BestinDevice, FanEntity):
         self._supported_features = FanEntityFeature.SET_SPEED
         self._supported_features |= FanEntityFeature.PRESET_MODE
         self._speed_list = [SPEED_LOW, SPEED_MEDIUM, SPEED_HIGH]
-        self._preset_modes = [PRESET_NATURAL, PRESET_NONE]
+        self._preset_modes = [PRESET_NONE, PRESET_NATURAL_VENTILATION]
 
     @property
     def is_on(self) -> bool:
@@ -102,7 +102,7 @@ class BestinFan(BestinDevice, FanEntity):
             percentage_to_ordered_list_item(self._speed_list, percentage)
             if percentage > 0 else 0
         )
-        self._on_command(speed=speed)
+        await self._on_command(speed=speed)
 
     @property
     def preset_mode(self):
@@ -116,7 +116,7 @@ class BestinFan(BestinDevice, FanEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the preset mode of the fan."""
-        self._on_command(
+        await self._on_command(
             preset=False if preset_mode == PRESET_NONE else preset_mode
         )
 
@@ -128,8 +128,8 @@ class BestinFan(BestinDevice, FanEntity):
         **kwargs: Any,
     ) -> None:
         """Turn on fan."""
-        self._on_command(True)
+        await self._on_command(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off fan."""
-        self._on_command(False)
+        await self._on_command(False)
