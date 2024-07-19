@@ -23,8 +23,7 @@
                 "init": {
                     "title": "사용자 옵션 조정",
                     "data": {
-                        "max_transmissions": "최대 전송 수",
-                        "transmission_interval": "전송 간격"
+                        "max_transmissions": "최대 전송 수"
                     }
                 }
             }

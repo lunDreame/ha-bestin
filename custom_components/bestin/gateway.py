@@ -105,6 +105,7 @@ class SerialSocketCommunicator:
                 self.connection.write(packet)
             elif self.is_socket:
                 self.connection.send(packet)
+            time.sleep(0.1)
         except Exception as e:
             LOGGER.error(f"Failed to send packet data: {e}")
             self.reconnect()

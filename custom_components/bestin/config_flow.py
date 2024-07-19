@@ -20,7 +20,6 @@ import homeassistant.helpers.config_validation as cv
 from .const import (
     DEFAULT_PORT,
     DEFAULT_MAX_TRANSMISSIONS,
-    DEFAULT_TRANSMISSION_INTERVAL,
     DOMAIN, 
     LOGGER
 )
@@ -106,11 +105,6 @@ class OptionsFlowHandler(OptionsFlow):
                     "max_transmissions", DEFAULT_MAX_TRANSMISSIONS
                 )
             ): ConfigFlow.int_between(1, 50),
-            vol.Required("transmission_interval",
-                default=self.config_entry.options.get(
-                    "transmission_interval", DEFAULT_TRANSMISSION_INTERVAL
-                )
-            ): ConfigFlow.int_between(100, 250),
         }
 
         return self.async_show_form(

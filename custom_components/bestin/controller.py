@@ -14,7 +14,6 @@ from .const import (
     DOMAIN,
     LOGGER,
     DEFAULT_MAX_TRANSMISSIONS,
-    DEFAULT_TRANSMISSION_INTERVAL,
     ELEMENT_BYTE_RANGE,
     DEVICE_TYPE_MAP,
     DEVICE_PLATFORM_MAP,
@@ -531,10 +530,6 @@ class BestinController:
 
     def send_packet_queue(self, queue: dict[str, Any]) -> None:
         """Sends queued command packet data."""
-        transmission_interval = self.config_entry.options.get(
-            "transmission_interval", DEFAULT_TRANSMISSION_INTERVAL
-        ) / 1000
-
         LOGGER.info(
             "Send the %s command of the %s device. command Packet: %s, attempts: %s",
             queue["value"],
@@ -543,7 +538,6 @@ class BestinController:
             queue["attempt"],
         )
         queue["attempt"] += 1
-        time.sleep(transmission_interval)
         self.send_data(queue["command"])
 
     def parse_packet_data(self, packet: bytes) -> None:
