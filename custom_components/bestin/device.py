@@ -13,19 +13,16 @@ from .const import DOMAIN, LOGGER, MAIN_DEVICES
 def split_dt(dt: str) -> str:
     """
     Split the first part by a colon,
-    if there is no colon, it returns the entire string.
+    if there is no colon, return the entire string.
     """
-    if ":" in dt:
-        return dt.split(":")[0].title()
-    else:
-        return dt.title()
+    return dt.split(":")[0].title() if ":" in dt else dt.title()
 
 
 class BestinBase:
-    """Bestin Base Class."""
+    """Base class for BESTIN devices."""
 
     def __init__(self, device, gateway):
-        """Setting up device and update callbacks."""
+        """Set up device and update callbacks."""
         self._device = device
         self.gateway = gateway
 
@@ -37,40 +34,31 @@ class BestinBase:
     @property
     def device_info(self):
         """Return device registry information for this entity."""
+        base_info = {
+            "connections": {(self.gateway.gatewayid, self.unique_id)},
+            "identifiers": {(DOMAIN, f"{self.gateway.wp_ver}_{split_dt(self._device.type)}")},
+            "manufacturer": "HDC Labs Co., Ltd.",
+            "model": self.gateway.wp_ver,
+            "name": f"{self.gateway.name} {split_dt(self._device.type)}",
+            "sw_version": self.gateway.version,
+            "via_device": (DOMAIN, self.gateway.gatewayid),
+        }
         if self._device.type in MAIN_DEVICES:
-            return {
-                "connections": {(self.gateway.host, self.unique_id)},
-                "identifiers": {(DOMAIN, f"{self.gateway.wp_ver}_{self.gateway.model}")},
-                "manufacturer": "HDC Labs Co., Ltd.",
-                "model": f"{self.gateway.wp_ver}-generation",
-                "name": self.gateway.name,
-                "sw_version": self.gateway.version,
-                "via_device": (DOMAIN, self.gateway.host),
-            }
-        else:
-            return {
-                "connections": {(self.gateway.host, self.unique_id)},
-                "identifiers": {
-                    (DOMAIN, f"{self.gateway.wp_ver}_{split_dt(self._device.type)}")
-                },
-                "manufacturer": "HDC Labs Co., Ltd.",
-                "model": f"{self.gateway.wp_ver}-generation",
-                "name": f"{self.gateway.name} {split_dt(self._device.type)}",
-                "sw_version": self.gateway.version,
-                "via_device": (DOMAIN, self.gateway.host),
-            }
+            base_info["identifiers"] = {(DOMAIN, f"{self.gateway.wp_ver}_{self.gateway.model}")}
+        return base_info
 
     async def _on_command(self, data: Any = None, **kwargs):
-        """Set commands for the device."""
+        """Send commands to the device."""
         await self._device.on_command(self.unique_id, data, **kwargs)
 
 
 class BestinDevice(BestinBase, RestoreEntity):
     """Define the Bestin Device entity."""
+
     TYPE = ""
 
     def __init__(self, device, gateway):
-        """Setting up device and update callbacks."""
+        """Set up device and update callbacks."""
         super().__init__(device, gateway)
         self.gateway.entities[self.TYPE].add(self.unique_id)
 
@@ -93,6 +81,7 @@ class BestinDevice(BestinBase, RestoreEntity):
     @callback
     def async_restore_last_state(self, last_state) -> None:
         """Restore previous state."""
+        pass
 
     @callback
     def async_update_callback(self):
@@ -111,15 +100,14 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     @property
     def should_poll(self) -> bool:
-        """No polling needed for this device."""
-        return False
+        """Determine if the device should be polled."""
+        return self.gateway.is_polling
 
     @property
     def extra_state_attributes(self):
         """Return the state attributes of the sensor."""
-        attributes = {
+        return {
             "unique_id": self.unique_id,
             "device_room": self._device.room,
             "device_type": self._device.type,
         }
-        return attributes

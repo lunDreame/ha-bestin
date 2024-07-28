@@ -2,58 +2,38 @@
 
 from __future__ import annotations
 
-import re
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, LOGGER, PLATFORMS
 from .gateway import BestinGateway
-from .api import BestinAPI
-
-
-def check_ip_or_serial(unique_id: str) -> bool:
-    ip_pattern = re.compile(r'^((25[0-5]|2[0-4][0-9]|[0-1]?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|[0-1]?[0-9]?[0-9])$')
-    serial_pattern = re.compile(r'^/dev/ttyUSB\d+$')
-
-    if ip_pattern.match(unique_id) or serial_pattern.match(unique_id):
-        return True
-    else:
-        return False
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up the BESTIN integration."""
-    hass.data.setdefault(DOMAIN, {})
+    gateway = BestinGateway(hass, config_entry)
+    hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = gateway
 
-    entry_id = config_entry.entry_id
-    entry_data = config_entry.data
-    LOGGER.debug(f"Entry data: {entry_data}")
+    LOGGER.debug(f"Entry data: {config_entry.data}, unique ID: {config_entry.unique_id}")
 
-    if "version" in entry_data:
-        coordinator = BestinAPI(hass, config_entry, entry_data["version"])
-    else:
-        coordinator = BestinGateway(hass, config_entry)
-
-    hass.data[DOMAIN][entry_id] = coordinator
-
-    if isinstance(coordinator, BestinGateway):
-        if not await coordinator.connect():
+    if "version" not in config_entry.data:
+        if not await gateway.connect():
             LOGGER.debug("Gateway connection failed")
-            await coordinator.shutdown()
-            hass.data[DOMAIN].pop(entry_id)
+            await gateway.shutdown()
+            hass.data[DOMAIN].pop(config_entry.entry_id)
             return False
 
-        LOGGER.debug(f"Gateway connected: {coordinator.host}")
-        await coordinator.async_load_entity_registry()
-        await coordinator.async_initialize_gateway()
-        config_entry.async_on_unload(
-            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, coordinator.shutdown)
-        )
+        LOGGER.debug(f"Gateway connected: {gateway.gatewayid}")
+        await gateway.async_initialize_gateway()
     else:
-        await coordinator.setup_initial_control_list()
+        await gateway.initialize_control_statuses()
 
+    await gateway.async_load_entity_registry()
+
+    config_entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
+    )
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_update_listener)
     )
@@ -73,8 +53,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
     if unload_ok := await hass.config_entries.async_unload_platforms(
         config_entry, PLATFORMS
     ):
-        if check_ip_or_serial(config_entry.unique_id):
-            await hass.data[DOMAIN][config_entry.entry_id].shutdown()
+        await hass.data[DOMAIN][config_entry.entry_id].shutdown()
 
         hass.data[DOMAIN].pop(config_entry.entry_id)
 

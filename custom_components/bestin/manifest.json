@@ -5,6 +5,7 @@
     "documentation": "https://github.com/lunDreame/ha-bestin",
     "requirements": [
         "pyserial-asyncio",
+        "sseclient-py",
         "xmltodict"
     ],
     "dependencies": [],

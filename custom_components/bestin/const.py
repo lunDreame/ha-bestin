@@ -1,5 +1,4 @@
 import logging
-from datetime import timedelta
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import (
@@ -15,16 +14,19 @@ NAME = "BESTIN"
 VERSION = "1.1.0"
 
 LOGGER = logging.getLogger(__package__)
-SCAN_INTERVAL = timedelta(seconds=60)
 
 DEFAULT_PORT = 8899
-DEFAULT_SCAN_INTERVAL = 5
+DEFAULT_SCAN_INTERVAL = 15
 DEFAULT_MAX_TRANSMISSION = 10
 
 # Fan
-SPEED_LOW = 1
-SPEED_MEDIUM = 2
-SPEED_HIGH = 3
+SPEED_STR_LOW = "low"
+SPEED_STR_MEDIUM = "mid"
+SPEED_STR_HIGH = "high"
+
+SPEED_INT_LOW = 1
+SPEED_INT_MEDIUM = 2
+SPEED_INT_HIGH = 3
 
 PRESET_NONE = "None"
 PRESET_NATURAL_VENTILATION = "Natural Ventilation"
@@ -32,6 +34,9 @@ PRESET_NATURAL_VENTILATION = "Natural Ventilation"
 DEVICE_CONSUMPTION = "outlet:consumption"
 DEVICE_CUTOFF = "outlet:cutoff"
 DEVICE_DOORLOCK = "doorlock"
+DEVICE_ELEVATOR = "elevator"
+DEVICE_FLOOR = "elevator:floor"
+DEVICE_DIRECTION = "elevator:direction"
 DEVICE_ENERGY = "energy"
 DEVICE_FAN = "fan"
 DEVICE_GAS = "gas"
@@ -41,6 +46,9 @@ DEVICE_THERMOSTAT = "thermostat"
 
 MAIN_DEVICES = [
     DEVICE_DOORLOCK,
+    DEVICE_ELEVATOR,
+    DEVICE_FLOOR,
+    DEVICE_DIRECTION,
     DEVICE_FAN,
     DEVICE_GAS,
 ]
@@ -94,6 +102,8 @@ ELEMENT_UNIT = {
 
 ELEMENT_VALUE_CONVERSION = {
     DEVICE_CONSUMPTION: lambda value: value,
+    DEVICE_FLOOR: lambda value: value,
+    DEVICE_DIRECTION: lambda value: value,
     ELECTRIC_TOTAL: lambda value: round(value / 100, 2),
     ELECTRIC_REALTIME: lambda value: value,
     GAS_TOTAL: lambda value: round(value / 1000, 2),
@@ -125,6 +135,9 @@ DEVICE_TYPE_MAP = {
     DEVICE_CONSUMPTION: NEW_SENSOR,
     DEVICE_CUTOFF: NEW_SWITCH,
     DEVICE_DOORLOCK: NEW_SWITCH,
+    DEVICE_ELEVATOR: NEW_SWITCH,
+    DEVICE_FLOOR: NEW_SENSOR,
+    DEVICE_DIRECTION: NEW_SENSOR,
     DEVICE_ENERGY: NEW_SENSOR,
     DEVICE_FAN: NEW_FAN,
     DEVICE_GAS: NEW_SWITCH,
@@ -137,6 +150,9 @@ DEVICE_PLATFORM_MAP = {
     DEVICE_CONSUMPTION: Platform.SENSOR,
     DEVICE_CUTOFF: Platform.SWITCH,
     DEVICE_DOORLOCK: Platform.SWITCH,
+    DEVICE_ELEVATOR: Platform.SWITCH,
+    DEVICE_FLOOR: Platform.SENSOR,
+    DEVICE_DIRECTION: Platform.SENSOR,
     DEVICE_ENERGY: Platform.SENSOR,
     DEVICE_FAN: Platform.FAN,
     DEVICE_GAS: Platform.SWITCH,

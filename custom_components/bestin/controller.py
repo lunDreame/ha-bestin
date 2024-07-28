@@ -1,3 +1,4 @@
+from asyncio import tasks
 import re
 import asyncio
 from typing import Any, Callable, Optional
@@ -17,6 +18,9 @@ from .const import (
     ELEMENT_BYTE_RANGE,
     DEVICE_TYPE_MAP,
     DEVICE_PLATFORM_MAP,
+    SPEED_INT_LOW,
+    SPEED_INT_MEDIUM,
+    SPEED_INT_HIGH,
 )
 
 
@@ -35,6 +39,33 @@ class DeviceProfile:
     on_update: Optional[Callable] = field(default=None)
 
 
+class AsyncQueue:
+    def __init__(self):
+        self.queue = asyncio.Queue()
+        
+    async def put(self, item):
+        """Function to put data into the queue"""
+        await self.queue.put(item)
+    
+    async def get(self):
+        """Function to get data from the queue (only retrieve, not delete)"""
+        if not self.queue.empty():
+            item = await self.queue.get()
+            await self.queue.put(item)
+            return item
+        return None
+    
+    async def delete(self):
+        """Function to delete data from the queue"""
+        if not self.queue.empty():
+            return await self.queue.get()
+        return None
+    
+    async def size(self):
+        """Function to return the size of the queue"""
+        return self.queue.qsize()
+    
+
 class BestinController:
     """Bestin Controller Class."""
 
@@ -43,47 +74,51 @@ class BestinController:
         hass: HomeAssistant,
         config_entry: ConfigEntry,
         entities,
-        host, 
-        connection,
+        gatewayid, 
+        communicator,
         async_add_device,
     ) -> None:
         self.hass = hass
         self.config_entry = config_entry
         self.entities = entities
-        self.host = host
-        self.connection = connection
+        self.gatewayid = gatewayid
+        self.communicator = communicator
         self.async_add_device = async_add_device
         self.gateway_type: str = config_entry.data["gateway_mode"][0]
         self.room_to_command: dict[bytes] = config_entry.data["gateway_mode"][1]
         
         self.devices: dict[str, dict] = {}
-        self.packet_queue = asyncio.Queue()
         self.stop_event = asyncio.Event()
+        self.queue = AsyncQueue()
+        self.tasks = []
 
-    def start(self):
+    async def start(self) -> None:
         """Start main loop with asyncio."""
         self.stop_event.clear()
-        self.hass.loop.create_task(self.main())
+        self.tasks.append(asyncio.create_task(self.process_main_queue()))
 
-    def stop(self):
-        """Stop main loop."""
+    async def stop(self) -> None:
+        """Stop main loop and cancel all tasks."""
         self.stop_event.set()
+        if len(self.tasks) > 0:
+            for task in self.tasks:
+                task.cancel()
 
     @property
     def available(self) -> bool:
-        """Check if the connection is alive"""
-        return self.connection.is_connected()
+        """Check if the communicator is alive"""
+        return self.communicator.is_connected()
     
     @property
     async def receive_data(self) -> bytes:
-        """Receive data from connection."""
+        """Receive data from communicator."""
         if self.available:
-            return await self.connection.receive()
+            return await self.communicator.receive()
 
     async def send_data(self, packet: bytearray) -> None:
-        """Send packet data to the connection."""
+        """Send packet data to the communicator."""
         if self.available:
-            await self.connection.send(packet)
+            await self.communicator.send(packet)
 
     def calculate_checksum(self, packet: bytearray) -> int:
         """Compute checksum from packet data."""
@@ -308,7 +343,7 @@ class BestinController:
             "response": None, # ACK
         }
         LOGGER.debug(f"Create queue task: {queue_task}")
-        await self.packet_queue.put(queue_task)
+        await self.queue.put(queue_task)
     
     def initialize_device(
         self, device_id: str, sub_id: str | None, state: Any
@@ -318,19 +353,19 @@ class BestinController:
         
         base_unique_id = f"bestin_{device_id}"
         unique_id = f"{base_unique_id}_{sub_id}" if sub_id else base_unique_id
-        unique_id_with_host = f"{unique_id}-{self.host}"
+        full_unique_id = f"{unique_id}-{self.gatewayid}"
         
         if device_type != "energy" and (sub_id and not sub_id.isdigit()):
-            letter_sub_id = ''.join(re.findall(r'[a-zA-Z]', sub_id))
+            letter_sub_id = "".join(re.findall(r'[a-zA-Z]', sub_id))
             device_type = f"{device_type}:{letter_sub_id}"
         
         platform = DEVICE_PLATFORM_MAP.get(device_type)
         if not platform:
             raise ValueError(f"Unsupported platform type for device: {device_type}")
 
-        if unique_id_with_host not in self.devices:
+        if full_unique_id not in self.devices:
             device = DeviceProfile(
-                unique_id=unique_id_with_host,
+                unique_id=full_unique_id,
                 name=unique_id,
                 type=device_type,
                 room=device_room,
@@ -340,9 +375,9 @@ class BestinController:
                 on_remove=self.on_remove,
                 on_command=self.on_command,
             )
-            self.devices[unique_id_with_host] = device
+            self.devices[full_unique_id] = device
 
-        return self.devices[unique_id_with_host]
+        return self.devices[full_unique_id]
     
     def setup_device(
         self, device_id: str, state: Any, is_sub: bool = False
@@ -361,8 +396,9 @@ class BestinController:
             unique_id = device.unique_id
 
             if device_type != "energy" and sub_id and not sub_id.isdigit():
-                letter_sub_id = ''.join(re.findall(r'[a-zA-Z]', sub_id))
-                new_device_type = DEVICE_TYPE_MAP[f"{device_type}:{letter_sub_id}"]
+                letter_sub_id = "".join(re.findall(r'[a-zA-Z]', sub_id))
+                device_key = f"{device_type}:{letter_sub_id}"
+                new_device_type = DEVICE_TYPE_MAP[device_key]
             else:
                 new_device_type = DEVICE_TYPE_MAP[device_type]
 
@@ -394,7 +430,7 @@ class BestinController:
         room_id = packet[5] & 0x0F
         is_heating = bool(packet[6] & 0x01)
         target_temperature = (packet[7] & 0x3F) + (packet[7] & 0x40 > 0) * 0.5
-        current_temperature = int.from_bytes(packet[8:10], byteorder='big') / 10.0
+        current_temperature = int.from_bytes(packet[8:10], byteorder="big") / 10.0
         hvac_mode = HVACMode.HEAT if is_heating else HVACMode.OFF
 
         thermostat_state = {
@@ -425,8 +461,9 @@ class BestinController:
         fan_state = {
             "state": bool(packet[5] & 0x01),
             "speed": packet[6],
-            "timer": packet[7],
+            "speed_list": [SPEED_INT_LOW, SPEED_INT_MEDIUM, SPEED_INT_HIGH],
             "preset": preset_mode,
+            "preset_mode": [PRESET_NATURAL_VENTILATION, PRESET_NONE],
         }
         return room_id, fan_state
     
@@ -448,7 +485,7 @@ class BestinController:
             idx2 = idx + 2
 
             if len(packet) > idx2:
-                value = int.from_bytes(packet[idx:idx2], byteorder='big')
+                value = int.from_bytes(packet[idx:idx2], byteorder="big")
                 consumption = value / 10.
             else:
                 consumption = 0.
@@ -519,7 +556,8 @@ class BestinController:
 
         if header_byte == packet[1] and (
             overview == packet_value or packet_value == 0x81
-        ):
+        ):  
+            self.handle_device_packet(packet)
             queue["response"] = packet
 
     async def send_packet_queue(self, queue: dict) -> None:
@@ -575,9 +613,12 @@ class BestinController:
                 device_id = f"{device_type}_{room_id}"
                 self.setup_device(device_id, device_state)
 
-    async def handle_packet_queue(self, queue: dict[str, Any]) -> None:
+    async def handle_packet_queue(self, queue: dict) -> None:
         """Processes the queued command packet data."""
         await self.send_packet_queue(queue)
+        max_transmission = self.config_entry.options.get(
+            "max_transmission", DEFAULT_MAX_TRANSMISSION
+        )
 
         if response := queue["response"]:
             LOGGER.info(
@@ -587,22 +628,16 @@ class BestinController:
                 response.hex(),
                 queue["transmission"],
             )
-            self.packet_queue._queue.remove(queue)
-            self.packet_queue.task_done()
-        elif queue["transmission"] > self.config_entry.options.get(
-            "max_transmission", DEFAULT_MAX_TRANSMISSION
-        ):
+            await self.queue.delete()
+        elif queue["transmission"] > max_transmission:
             LOGGER.info(
                 "Command for %s device exceeded %s attempts, cancelling operation",
-                queue["device_type"], self.config_entry.options.get(
-                    "max_transmission", DEFAULT_MAX_TRANSMISSION
-                )
+                queue["device_type"], max_transmission
             )
-            self.packet_queue._queue.remove(queue)
-            self.packet_queue.task_done()
+            await self.queue.delete()
 
-    async def main(self) -> None:
-        """Main loop for processing received data and packet queue.""" 
+    async def process_main_queue(self) -> None:
+        """Processing main queue and received data."""
         while not self.stop_event.is_set():
             if self.available:
                 received_data = await self.receive_data
@@ -610,14 +645,12 @@ class BestinController:
                 received_data = None
 
             if received_data and self.verify_checksum(received_data):
-                #LOGGER.debug(f"received_data: {received_data}")
+                #LOGGER.debug("Received data: %s", received_data)
                 self.handle_device_packet(received_data)
-                if not self.packet_queue.empty():
-                    queue = self.packet_queue._queue[0]
-                    self.check_command_response_packet(received_data, queue)
+                if await self.queue.size() > 0:
+                    self.check_command_response_packet(received_data, await self.queue.get())
 
-            if not self.packet_queue.empty():
-                queue = self.packet_queue._queue[0]
-                await self.handle_packet_queue(queue)
+            if await self.queue.size() > 0:
+                await self.handle_packet_queue(await self.queue.get())
 
             await asyncio.sleep(0.02)

@@ -1,6 +1,7 @@
 """Config flow to configure BESTIN."""
 
 from __future__ import annotations
+from socket import timeout
 from typing import Any
 
 import voluptuous as vol
@@ -50,7 +51,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
     
     @staticmethod
     def int_between(min_int, max_int):
-        """Return an integer between 'min_int' and 'max_int'."""
+        """Return an integer between "min_int" and "max_int"."""
         return vol.All(vol.Coerce(int), vol.Range(min=min_int, max=max_int))
 
     async def async_step_user(
@@ -86,34 +87,34 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _v1_server_login(self, session):
         """Login to HDC v1 server."""
-        url = "http://59.7.82.99/webapp/data/getLoginWebApp.php"
+        url = f"http://{self.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
         params = {
             "login_ide": self.data[CONF_USERNAME],
             "login_pwd": self.data[CONF_PASSWORD],
         }
 
         try:
-            async with session.get(url=url, params=params) as response:
-                data = await response.json(content_type="text/html")
+            async with session.get(url=url, params=params, timeout=5) as response:
+                response_data = await response.json(content_type="text/html")
 
-                if response.status == 200 and "_fair" not in data["ret"]:
+                if response.status == 200 and "_fair" not in response_data["ret"]:
                     cookies = response.cookies
                     new_cookie = {
-                        "PHPSESSID": cookies.get("PHPSESSID").value,
-                        "user_id": cookies.get("user_id").value,
-                        "user_name": cookies.get("user_name").value,
+                        "PHPSESSID": cookies.get("PHPSESSID").value if cookies.get("PHPSESSID") else None,
+                        "user_id": cookies.get("user_id").value if cookies.get("user_id") else None,
+                        "user_name": cookies.get("user_name").value if cookies.get("user_name") else None,
                     }
-                    LOGGER.info(f"Login successful: {data}, {new_cookie}")
+                    LOGGER.info(f"V1 Login successful. Response data: {response_data}. Cookies: {new_cookie}")
                     return new_cookie, None
-                elif "_fair" in data["ret"]:
-                    LOGGER.error(f"Login failed with status 200: Invalid value: {data['msg']}")
-                    return None, ("error_login", data["msg"])
+                elif "_fair" in response_data["ret"]:
+                    LOGGER.error(f"V1 Login failed (status 200): Invalid credentials. Message: {response_data['msg']}")
+                    return None, ("error_login", response_data["msg"])
                 else:
-                    LOGGER.error(f"Login failed with status {response.status}: {data}")
+                    LOGGER.error(f"V1 Login failed. Status: {response.status}. Response data: {response_data}")
                     return None, ("error_network", None)
 
         except Exception as ex:
-            LOGGER.error(f"Exception during login: {type(ex).__name__}: {ex}")
+            LOGGER.error(f"V1 Login exception: {type(ex).__name__}. Details: {ex}")
             return None, ("error_network", None)
 
     async def _v2_server_login(self, session):
@@ -126,21 +127,21 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         }
 
         try:
-            async with session.post(url=url, headers=headers) as response:
-                data = await response.json()
+            async with session.post(url=url, headers=headers, timeout=5) as response:
+                response_data = await response.json()
         
                 if response.status == 200:
-                    LOGGER.info(f"Login successful: {data}")
-                    return data, None
+                    LOGGER.info(f"V2 Login successful. Response data: {response_data}")
+                    return response_data, None
                 elif response.status == 500:
-                    LOGGER.error(f"Login failed with status 500: Server error: {data['err']}")
-                    return None, ("error_login", data["err"])
+                    LOGGER.error(f"V2 Login failed (status 500): Server error. Error message: {response_data['err']}")
+                    return None, ("error_login", response_data["err"])
                 else:
-                    LOGGER.error(f"Login failed with status {response.status}: {data}")
+                    LOGGER.error(f"V2 Login failed. Status: {response.status}. Response data: {response_data}")
                     return None, ("error_network", None)
                 
         except Exception as ex:
-            LOGGER.error(f"Exception during login: {type(ex).__name__}: {ex}")
+            LOGGER.error(f"V2 Login exception: {type(ex).__name__}. Details: {ex}")
             return None, ("error_network", None)
 
     async def async_step_center(
@@ -184,7 +185,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         description_placeholders = None  
 
         if user_input is not None:
-            self.data.update(user_input)
+            self.data.update({**user_input, "identifier": self.config_identifier})
             session = async_create_clientsession(self.hass)
 
             response, error_message = await self._v1_server_login(session)
@@ -220,14 +221,14 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         description_placeholders = None  
 
         if user_input is not None:
-            self.data.update(user_input)
+            self.data.update({**user_input, "identifier": self.config_identifier})
             session = async_create_clientsession(self.hass)
 
             response, error_message = await self._v2_server_login(session)
- 
+
             if error_message:
                 errors["base"] = error_message[0]
-                description_placeholders = {"err": error_message[1]['msg']}
+                description_placeholders = {"err": error_message[1]["msg"]}
             else:
                 self.data[self.center_version] = response
                 await self.async_set_unique_id(user_input[self.config_identifier])
@@ -281,8 +282,14 @@ class OptionsFlowHandler(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
-                vol.Required("max_transmission", default=DEFAULT_MAX_TRANSMISSION): ConfigFlow.int_between(1, 20),
-                vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): ConfigFlow.int_between(1, 30),
+                vol.Required(
+                    "max_transmission", 
+                    default=self.config_entry.options.get("max_transmission", DEFAULT_MAX_TRANSMISSION)
+                ): ConfigFlow.int_between(1, 20),
+                vol.Required(
+                    CONF_SCAN_INTERVAL,
+                    default=self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+                ): ConfigFlow.int_between(1, 60),
             }),
             errors=errors
         )

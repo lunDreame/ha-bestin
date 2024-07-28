@@ -48,6 +48,14 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     """Defined the Switch."""
     TYPE = DOMAIN
 
+    def __init__(self, device, gateway):
+        """Initialize the switch."""
+        super().__init__(device, gateway)
+        self._version_exists = hasattr(self.gateway.api, "version")
+        
+        if self._version_exists:
+            self._version_exists = self.gateway.api.version
+
     @property
     def is_on(self):
         """Return true if switch is on."""
@@ -55,8 +63,12 @@ class BestinSwitch(BestinDevice, SwitchEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn on switch."""
-        await self._on_command(True)
+        await self._on_command(
+            "on" if self._version_exists else True
+        )
 
     async def async_turn_off(self, **kwargs):
         """Turn off switch."""
-        await self._on_command(False)
+        await self._on_command(
+            "off" if self._version_exists else False
+        )

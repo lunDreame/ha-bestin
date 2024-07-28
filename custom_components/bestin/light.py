@@ -57,7 +57,11 @@ class BestinLight(BestinDevice, LightEntity):
         super().__init__(device, gateway)
         self._color_mode = ColorMode.ONOFF
         self._supported_color_modes = {ColorMode.ONOFF}
-    
+        self._version_exists = hasattr(self.gateway.api, "version")
+
+        if self._version_exists:
+            self._version_exists = self.gateway.api.version
+
     @property
     def color_mode(self):
         """Return the color mode of the light."""
@@ -75,8 +79,12 @@ class BestinLight(BestinDevice, LightEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""
-        await self._on_command(True)
+        await self._on_command(
+            "on" if self._version_exists else True
+        )
 
     async def async_turn_off(self, **kwargs):
         """Turn off light."""
-        await self._on_command(False)
+        await self._on_command(
+            "off" if self._version_exists else False
+        )

@@ -64,12 +64,16 @@ class BestinClimate(BestinDevice, ClimateEntity):
         self._supported_features |= ClimateEntityFeature.TURN_OFF
         self._hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
         self._preset_modes = []
+        self._version_exists = hasattr(self.gateway.api, "version")
+
+        if self._version_exists:
+            self._version_exists = self.gateway.api.version
 
     @property
     def supported_features(self):
         """Return the list of supported features."""
         return self._supported_features
-    
+
     @property
     def hvac_mode(self):
         """Return hvac operation ie. heat, cool mode.
@@ -93,7 +97,13 @@ class BestinClimate(BestinDevice, ClimateEntity):
         """Set new target hvac mode."""
         if hvac_mode not in self.hvac_modes:
             raise ValueError(f"Unsupported HVAC mode {hvac_mode}")
-        await self._on_command(mode=True if hvac_mode == HVACMode.HEAT else False)
+
+        if self._version_exists:
+            is_on = "on" if hvac_mode == HVACMode.HEAT else "off"
+            await self._on_command(room=f"{is_on}/{self.target_temperature}")
+        else:
+            is_on = True if hvac_mode == HVACMode.HEAT else False
+            await self._on_command(mode=is_on)
 
     @property
     def preset_mode(self):
@@ -127,7 +137,15 @@ class BestinClimate(BestinDevice, ClimateEntity):
         """Set new target temperature."""
         if ATTR_TEMPERATURE not in kwargs:
             raise ValueError(f"Expected attribute {ATTR_TEMPERATURE}")
-        await self._on_command(set_temperature=(float(kwargs[ATTR_TEMPERATURE])))
+        
+        temperature = float(kwargs[ATTR_TEMPERATURE])
+
+        if self._version_exists:
+            await self._on_command(
+                room=f"on/{temperature}/{self.current_temperature}"
+            )
+        else:
+            await self._on_command(set_temperature=temperature)
 
     @property
     def temperature_unit(self) -> UnitOfTemperature:
