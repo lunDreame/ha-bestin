@@ -1,7 +1,6 @@
 """Config flow to configure BESTIN."""
 
 from __future__ import annotations
-from socket import timeout
 from typing import Any
 
 import voluptuous as vol
@@ -34,6 +33,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_MAX_TRANSMISSION,
+    DEFAULT_PACKET_VIEWER,
 )
 
 
@@ -45,9 +45,9 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
         """Get the options flow for this handler."""
-        return OptionsFlowHandler(config_entry)
+        return OptionsFlowHandler(entry)
     
     @staticmethod
     def int_between(min_int, max_int):
@@ -85,7 +85,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors
         )
 
-    async def _v1_server_login(self, session):
+    async def _v1_server_login(self, session) -> Any:
         """Login to HDC v1 server."""
         url = f"http://{self.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
         params = {
@@ -117,7 +117,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             LOGGER.error(f"V1 Login exception: {type(ex).__name__}. Details: {ex}")
             return None, ("error_network", None)
 
-    async def _v2_server_login(self, session):
+    async def _v2_server_login(self, session) -> Any:
         """Login to HDC v2 server."""
         url = "https://center.hdc-smart.com/v3/auth/login"
         headers = {
@@ -263,9 +263,9 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(OptionsFlow):
     """Handle an option flow for BESTIN."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
+    def __init__(self, entry: ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        self.entry = entry
 
     async def async_step_init(
         self, 
@@ -274,7 +274,7 @@ class OptionsFlowHandler(OptionsFlow):
         """Handle options flow."""
         errors = {}
 
-        if self.config_entry.source == SOURCE_IMPORT:
+        if self.entry.source == SOURCE_IMPORT:
             return self.async_show_form(step_id="init", data_schema=None)
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
@@ -284,12 +284,16 @@ class OptionsFlowHandler(OptionsFlow):
             data_schema=vol.Schema({
                 vol.Required(
                     "max_transmission", 
-                    default=self.config_entry.options.get("max_transmission", DEFAULT_MAX_TRANSMISSION)
-                ): ConfigFlow.int_between(1, 20),
+                    default=self.entry.options.get("max_transmission", DEFAULT_MAX_TRANSMISSION)
+                ): ConfigFlow.int_between(1, 50),
+                vol.Required(
+                    "packet_viewer",
+                    default=self.entry.options.get("packet_viewer", DEFAULT_PACKET_VIEWER)
+                ): cv.boolean,
                 vol.Required(
                     CONF_SCAN_INTERVAL,
-                    default=self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-                ): ConfigFlow.int_between(1, 60),
+                    default=self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+                ): cv.positive_int,
             }),
             errors=errors
         )

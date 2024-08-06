@@ -8,37 +8,37 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import LOGGER, NEW_SWITCH
+from .const import NEW_SWITCH
 from .device import BestinDevice
-from .gateway import load_gateway_from_entry
+from .hub import load_hub
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup switch platform."""
-    gateway = load_gateway_from_entry(hass, config_entry)
-    gateway.entities[DOMAIN] = set()
+    hub = load_hub(hass, entry)
+    hub.entities[DOMAIN] = set()
 
     @callback
     def async_add_switch(devices=None):
         if devices is None:
-            devices = gateway.api.switchs
+            devices = hub.api.switchs
 
         entities = [
-            BestinSwitch(device, gateway) 
+            BestinSwitch(device, hub) 
             for device in devices 
-            if device.unique_id not in gateway.entities[DOMAIN]
+            if device.unique_id not in hub.entities[DOMAIN]
         ]
 
         if entities:
             async_add_entities(entities)
 
-    gateway.listeners.append(
+    hub.listeners.append(
         async_dispatcher_connect(
-            hass, gateway.async_signal_new_device(NEW_SWITCH), async_add_switch
+            hass, hub.async_signal_new_device(NEW_SWITCH), async_add_switch
         )
     )
     async_add_switch()
@@ -48,27 +48,33 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     """Defined the Switch."""
     TYPE = DOMAIN
 
-    def __init__(self, device, gateway):
+    def __init__(self, device, hub):
         """Initialize the switch."""
-        super().__init__(device, gateway)
-        self._version_exists = hasattr(self.gateway.api, "version")
-        
-        if self._version_exists:
-            self._version_exists = self.gateway.api.version
+        super().__init__(device, hub)
+        self._is_gas = device.type == "gas"
+        self._version_exists = getattr(hub.api, "version", False)
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return true if switch is on."""
         return self._device.state
 
     async def async_turn_on(self, **kwargs):
-        """Turn on switch."""
-        await self._on_command(
-            "on" if self._version_exists else True
-        )
+        """Turn on light."""
+        if self._version_exists:
+            if self._is_gas:
+                await self._on_command("open")
+            else:
+                await self._on_command(switch="on")
+        else:
+            await self._on_command(True)
 
     async def async_turn_off(self, **kwargs):
-        """Turn off switch."""
-        await self._on_command(
-            "off" if self._version_exists else False
-        )
+        """Turn off light."""
+        if self._version_exists:
+            if self._is_gas:
+                await self._on_command("close")
+            else:
+                await self._on_command(switch="off")
+        else:
+            await self._on_command(False)

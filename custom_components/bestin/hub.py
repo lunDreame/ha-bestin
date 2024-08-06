@@ -6,6 +6,8 @@ import traceback
 import serial_asyncio # type: ignore
 import socket
 
+from typing import cast
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_IP_ADDRESS,
@@ -195,11 +197,11 @@ class SerialSocketCommunicator:
 
 
 @callback
-def load_gateway_from_entry(hass, config_entry):
+def load_hub(hass: HomeAssistant, entry: ConfigEntry) -> BestinAPI | BestinController:
     """Return gateway with a matching entry_id."""
-    return hass.data[DOMAIN][config_entry.entry_id]
+    return hass.data[DOMAIN][entry.entry_id]
 
-def check_ip_or_serial(id):
+def check_ip_or_serial(id: str) -> bool:
     """Verify that the string is an IP address or serial device path."""
     ip_pattern = re.compile(r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
     serial_pattern = re.compile(r"/dev/tty(USB|AMA)\d+")
@@ -210,15 +212,15 @@ def check_ip_or_serial(id):
         return False
 
 
-class BestinGateway:
-    """Bestin Gateway Class."""
+class BestinHub:
+    """Bestin Hub Class."""
 
     def __init__(
-        self, hass: HomeAssistant, config_entry: ConfigEntry
+        self, hass: HomeAssistant, entry: ConfigEntry
     ) -> None:
-        """Gateway initialization."""
+        """Hub initialization."""
         self.hass = hass
-        self.config_entry = config_entry
+        self.entry = entry
         self.api: BestinAPI | BestinController = None
         self.communicator: SerialSocketCommunicator = None
         self.gateway_mode: tuple = None
@@ -226,29 +228,29 @@ class BestinGateway:
         self.listeners: list = []
 
     @property
-    def gatewayid(self) -> str:
-        """Return the gateway's unique identifier."""
-        return self.config_entry.unique_id
+    def hubId(self) -> str:
+        """Return the hub's unique identifier."""
+        return cast(str, self.entry.unique_id)
 
     @property
-    def ip_address(self) -> str:
+    def ipAddress(self) -> str:
         """Return the IP address config entry."""
-        return self.config_entry.data.get(CONF_IP_ADDRESS)
+        return cast(str, self.entry.data.get(CONF_IP_ADDRESS))
 
     @property
-    def port(self) -> str:
+    def port(self) -> int:
         """Return the port config entry."""
-        return self.config_entry.data.get(CONF_PORT)
+        return cast(int, self.entry.data.get(CONF_PORT))
 
     @property
     def identifier(self) -> str:
         """Return the identifier config entry."""
-        return self.config_entry.data.get("identifier")
+        return cast(str, self.entry.data.get("identifier"))
 
     @property
-    def center_version(self) -> str:
+    def version(self) -> str:
         """Return the version config entry."""
-        return self.config_entry.data.get("version")
+        return cast(str, self.entry.data.get("version"))
 
     @property
     def available(self) -> bool:
@@ -268,39 +270,39 @@ class BestinGateway:
         return NAME
 
     @property
-    def version(self) -> str:
+    def sw_version(self) -> str:
         """Return the version configuration."""
         return VERSION
     
     @property
     def is_polling(self) -> bool:
         """Return whether to poll according to device characteristics."""
-        if check_ip_or_serial(self.gatewayid):
+        if check_ip_or_serial(self.hubId):
             return False
         else:
             return True
 
     @property
-    def wp_ver(self) -> str:
+    def wp_version(self) -> str:
         """Returns the version of the gateway."""
-        if check_ip_or_serial(self.gatewayid):
+        if check_ip_or_serial(self.hubId):
             return f"{self.gateway_mode[0]}-generation"
         else:
-            return f"Center-{self.center_version}"
+            return f"Center-{self.version}"
 
     @property
     def conn_str(self) -> str:
         """Generate the connection string based on the host and port."""
-        if not re.match(r"/dev/tty(USB|AMA)\d+", self.gatewayid):
-            conn_str = f"{self.gatewayid}:{self.port}"
+        if not re.match(r"/dev/tty(USB|AMA)\d+", self.hubId):
+            conn_str = f"{self.hubId}:{self.port}"
         else:
-            conn_str = self.gatewayid
+            conn_str = self.hubId
         return conn_str
     
     async def determine_gateway_mode(self) -> None:
         """The gateway mode is determined by the received data."""
-        chunk_storage = []
-        aio_data = {}
+        chunk_storage: list = []
+        aio_data: dict = {}
         try:
             while len(b''.join(chunk_storage)) < 1024:
                 received_data = await self.communicator._receive_socket()
@@ -319,9 +321,7 @@ class BestinGateway:
                     "Received chunk: length=%d, room_byte=%s, command_byte=%s, hex=%s",
                     chunk_length, hex(room_byte), hex(command_byte), chunk.hex()
                 )
-                if ((chunk_length == 20 or chunk_length == 22)
-                    and command_byte in [0x91, 0xB2]
-                ):
+                if (chunk_length in [20, 22] and command_byte in [0x91, 0xB2]):
                     aio_data[room_byte] = command_byte
 
             if aio_data:
@@ -337,11 +337,11 @@ class BestinGateway:
                 f"Problematic packet: {problematic_packet.hex() if problematic_packet else 'None'}"
             )
         
-    async def async_load_entity_registry(self):
+    async def async_load_entity_registry(self) -> None:
         """Load entities from the registry and organize them by domain."""
         entity_registry = async_get(self.hass)
         get_entities = async_entries_for_config_entry(
-            entity_registry, self.config_entry.entry_id
+            entity_registry, self.entry.entry_id
         )
         for entity in get_entities:
             domain = entity.entity_id.split(".")[0]
@@ -354,19 +354,41 @@ class BestinGateway:
                 entity.entity_id, entity.unique_id, domain
             )
 
-    async def async_update_device_registry(self):
+    async def async_update_device_registry(self) -> None:
         """Create or update device entry in Home Assistant registry."""
         device_registry = dr.async_get(self.hass)
         device_registry.async_get_or_create(
-            config_entry_id=self.config_entry.entry_id,
-            connections={(DOMAIN, self.gatewayid)},
-            identifiers={(DOMAIN, self.gatewayid)},
+            entry_id=self.entry.entry_id,
+            connections={(DOMAIN, self.hubId)},
+            identifiers={(DOMAIN, self.hubId)},
             manufacturer="HDC Labs Co., Ltd.",
             name=self.name,
-            model=self.wp_ver,
-            sw_version=self.version,
-            via_device=(DOMAIN, self.gatewayid),
+            model=self.wp_version,
+            sw_version=self.sw_version,
+            via_device=(DOMAIN, self.hubId),
         )
+
+    def is_entity_registered(self, keyword: str) -> bool:
+        """Checks if any entity ID contains the given keyword."""
+        entity_registry = async_get(self.hass)
+        registered_entities = async_entries_for_config_entry(
+            entity_registry, self.entry.entry_id
+        )
+        LOGGER.debug(
+            "Entities found for config entry '%s': %s",
+            self.entry.entry_id, len(registered_entities)
+        )
+        matching_entities = [
+            entity.entity_id 
+            for entity in registered_entities
+            if keyword in entity.entity_id
+        ]
+        if matching_entities:
+            LOGGER.debug(f"Entities containing '{keyword}': {matching_entities}")
+        else:
+            LOGGER.debug(f"No entities containing '{keyword}'")
+
+        return len(matching_entities) > 0
 
     @callback
     def async_signal_new_device(self, device_type: str) -> str:
@@ -378,11 +400,11 @@ class BestinGateway:
             NEW_CLIMATE: "bestin_new_climate",
             NEW_FAN: "bestin_new_fan",
         }
-        return f"{new_device[device_type]}_{self.gatewayid}"
+        return f"{new_device[device_type]}_{self.hubId}"
 
     @callback
     def async_add_device_callback(
-        self, device_type, device=None, force: bool = False
+        self, device_type: str, device=None, force: bool = False
     ) -> None:
         """Add device callback if not already registered."""
         domain = device.platform
@@ -427,27 +449,24 @@ class BestinGateway:
         if self.communicator and self.available:
             await self.communicator.close()
 
-    async def async_initialize_gateway(self) -> None:
+    async def async_initialize_serial(self) -> None:
         """
-        Initialize the Bestin gateway.
-
-        This method sets up the Bestin gateway by ensuring the gateway mode is set,
-        updating the configuration entry, and starting the BestinController API.
+        Asynchronously initialize the Bestin Controller for serial communication.
         """
         try:
             if self.gateway_mode is None:
                 await self.determine_gateway_mode()
 
             self.hass.config_entries.async_update_entry(
-                entry=self.config_entry,
-                title=self.gatewayid,
-                data={**self.config_entry.data, "gateway_mode": self.gateway_mode},
+                entry=self.entry,
+                title=self.hubId,
+                data={**self.entry.data, "gateway_mode": self.gateway_mode},
             )
             self.api = BestinController(
                 self.hass,
-                self.config_entry,
+                self.entry,
                 self.entities,
-                self.gatewayid,
+                self.hubId,
                 self.communicator,
                 self.async_add_device_callback,
             )
@@ -456,37 +475,40 @@ class BestinGateway:
         except Exception as ex:
             self.api = None
             LOGGER.error(
-                f"Failed to initialize Bestin gateway. Host: {self.gatewayid}, Gateway Mode: {self.gateway_mode}. "
+                f"Failed to initialize Bestin gateway. Host: {self.hubId}, Gateway Mode: {self.gateway_mode}. "
                 f"Error: {str(ex)}. Traceback: {traceback.format_exc()}"
             )
 
-    async def initialize_control_statuses(self) -> None:
+    async def async_initialize_center(self) -> None:
         """
-        Initialize the initial control statuses for lights, outlets, and thermostats.
+        Asynchronously initialize the Bestin API for IPARK Smarthome.
         """
         try:
             self.api = BestinAPI(
                 self.hass,
-                self.config_entry,
+                self.entry,
                 self.entities,
-                self.gatewayid,
-                self.center_version,
+                self.hubId,
+                self.version,
                 self.identifier,
                 self.async_add_device_callback,
             )
             await self.api.start()
 
-            if self.center_version == "version2.0" and self.ip_address:
-                if re.match(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$", self.ip_address):
-                    await self.api._setup_elevator_entities()
+            if self.version == "version2.0" and self.ipAddress:
+                if re.match(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$", self.ipAddress):
+                    if not self.is_entity_registered(keyword="elevator"):
+                        await self.api.elevator_call_request()
+                    else:
+                        self.api.handle_message_info(message="{}")
                 else:
                     LOGGER.warning(
-                        f"Wallpad IP address exists, but it doesn't fit the format pattern. {self.ip_address} "
+                        f"Wallpad IP address exists, but it doesn't fit the format pattern. {self.ipAddress} "
                         f"Please report it to the developer."
                     )
         except Exception as ex:
             self.api = None
             LOGGER.error(
-                f"Failed to initialize Bestin API. Host: {self.gatewayid}, Version: {self.center_version}. "
+                f"Failed to initialize Bestin API. Host: {self.hubId}, Version: {self.version}. "
                 f"Error: {str(ex)}. Traceback: {traceback.format_exc()}"
             )

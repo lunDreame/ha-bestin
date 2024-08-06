@@ -15,20 +15,23 @@ jobs:
       id-token: write 
 
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Get the commit message
+      id: get_commit_message
+      run: echo "COMMIT_MSG=$(git log -1 --pretty=%B)" >> $GITHUB_ENV
+
     - name: Bump version and push tag
       id: tag_version
-      uses: mathieudutour/github-tag-action@v6.1
+      uses: mathieudutour/github-tag-action@v6.1 
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+        github_token: ${{ secrets.GITHUB_TOKEN }} 
 
     - name: Create a GitHub release
-      uses: ncipollo/release-action@v1
+      uses: ncipollo/release-action@v1 
       with:
         tag: ${{ steps.tag_version.outputs.new_tag }}
         name: Release ${{ steps.tag_version.outputs.new_tag }}
         body: ${{ steps.tag_version.outputs.changelog }}
-
-    - name: Update version in manifest.json
-      run: |
-        sed -i "s/\"version\": \".*\"/\"version\": \"${{ steps.tag_version.outputs.new_tag }}\"/" /custom_components/bestin/manifest.json
-      shell: bash
+        prerelease: ${{ steps.get_commit_message.outputs.COMMIT_MSG | contains('beta', 'i') }}

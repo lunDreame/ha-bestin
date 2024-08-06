@@ -5,7 +5,6 @@ from __future__ import annotations
 from homeassistant.components.climate import DOMAIN, ClimateEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
-    HVACAction,
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -14,37 +13,37 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import LOGGER, NEW_CLIMATE
+from .const import NEW_CLIMATE
 from .device import BestinDevice
-from .gateway import load_gateway_from_entry
+from .hub import load_hub
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup climate platform."""
-    gateway = load_gateway_from_entry(hass, config_entry)
-    gateway.entities[DOMAIN] = set()
+    hub = load_hub(hass, entry)
+    hub.entities[DOMAIN] = set()
 
     @callback
     def async_add_climate(devices=None):
         if devices is None:
-            devices = gateway.api.climates
+            devices = hub.api.climates
 
         entities = [
-            BestinClimate(device, gateway) 
+            BestinClimate(device, hub) 
             for device in devices 
-            if device.unique_id not in gateway.entities[DOMAIN]
+            if device.unique_id not in hub.entities[DOMAIN]
         ]
 
         if entities:
             async_add_entities(entities)
 
-    gateway.listeners.append(
+    hub.listeners.append(
         async_dispatcher_connect(
-            hass, gateway.async_signal_new_device(NEW_CLIMATE), async_add_climate
+            hass, hub.async_signal_new_device(NEW_CLIMATE), async_add_climate
         )
     )
     async_add_climate()
@@ -56,34 +55,32 @@ class BestinClimate(BestinDevice, ClimateEntity):
     
     _enable_turn_on_off_backwards_compatibility = False
 
-    def __init__(self, device, gateway):
+    def __init__(self, device, hub):
         """Initialize the climate."""
-        super().__init__(device, gateway)
-        self._supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
-        self._supported_features |= ClimateEntityFeature.TURN_ON
-        self._supported_features |= ClimateEntityFeature.TURN_OFF
+        super().__init__(device, hub)
+        self._supported_features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE | 
+            ClimateEntityFeature.TURN_ON | 
+            ClimateEntityFeature.TURN_OFF
+        )
         self._hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
-        self._preset_modes = []
-        self._version_exists = hasattr(self.gateway.api, "version")
-
-        if self._version_exists:
-            self._version_exists = self.gateway.api.version
+        self._version_exists = getattr(hub.api, "version", False)
 
     @property
-    def supported_features(self):
+    def supported_features(self) -> ClimateEntityFeature:
         """Return the list of supported features."""
         return self._supported_features
 
     @property
-    def hvac_mode(self):
+    def hvac_mode(self) -> HVACMode:
         """Return hvac operation ie. heat, cool mode.
 
         Need to be one of HVAC_MODE_*.
         """
-        return self._device.state["mode"]
+        return self._device.state["hvac_mode"]
 
     @property
-    def hvac_modes(self) -> list:
+    def hvac_modes(self) -> list[HVACMode]:
         """Return the list of available hvac operation modes."""
         return self._hvac_modes
 
@@ -92,7 +89,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
     async def async_turn_off(self) -> None:
         """Turn the entity off."""
-        
+
     async def async_set_hvac_mode(self, hvac_mode: str) -> None:
         """Set new target hvac mode."""
         if hvac_mode not in self.hvac_modes:
@@ -114,7 +111,6 @@ class BestinClimate(BestinDevice, ClimateEntity):
     @property
     def preset_modes(self) -> list:
         """Return the list of available preset modes."""
-        return self._preset_modes
  
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
@@ -133,7 +129,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
         """Return the target temperature."""
         return self._device.state["target_temperature"]
 
-    async def async_set_temperature(self, **kwargs):
+    async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
         if ATTR_TEMPERATURE not in kwargs:
             raise ValueError(f"Expected attribute {ATTR_TEMPERATURE}")
@@ -141,9 +137,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
         temperature = float(kwargs[ATTR_TEMPERATURE])
 
         if self._version_exists:
-            await self._on_command(
-                room=f"on/{temperature}/{self.current_temperature}"
-            )
+            await self._on_command(room=f"on/{temperature}/{self.current_temperature}")
         else:
             await self._on_command(set_temperature=temperature)
 
@@ -153,16 +147,16 @@ class BestinClimate(BestinDevice, ClimateEntity):
         return UnitOfTemperature.CELSIUS
 
     @property
-    def max_temp(self):
+    def max_temp(self) -> int:
         """Max tempreature."""
         return 40
 
     @property
-    def min_temp(self):
+    def min_temp(self) -> int:
         """Min tempreature."""
         return 5
 
     @property
-    def target_temperature_step(self):
+    def target_temperature_step(self) -> float:
         """Step tempreature."""
         return 0.5

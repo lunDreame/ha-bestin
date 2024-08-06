@@ -1,9 +1,8 @@
 import aiohttp
 import asyncio
 
-
 async def _session():
-    base_url = "http://x.x.x.x/webapp/data/getLoginWebApp.php"
+    base_url = "http://<redacted>/webapp/data/getLoginWebApp.php"
     params = {
         "login_ide": "",
         "login_pwd": ""
@@ -16,9 +15,9 @@ async def _session():
         "Cache-Control": "max-age=0",
         "Connection": "keep-alive",
         "Dnt": "1",
-        "Host": "",
+        "Host": "<redacted>",
         "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0 <redacted>"
     }
 
     try:

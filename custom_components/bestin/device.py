@@ -7,7 +7,7 @@ from typing import Any
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.core import callback
 
-from .const import DOMAIN, LOGGER, MAIN_DEVICES
+from .const import DOMAIN, MAIN_DEVICES
 
 
 def split_dt(dt: str) -> str:
@@ -21,10 +21,10 @@ def split_dt(dt: str) -> str:
 class BestinBase:
     """Base class for BESTIN devices."""
 
-    def __init__(self, device, gateway):
+    def __init__(self, device, hub):
         """Set up device and update callbacks."""
         self._device = device
-        self.gateway = gateway
+        self.hub = hub
 
     @property
     def unique_id(self) -> str:
@@ -35,16 +35,17 @@ class BestinBase:
     def device_info(self):
         """Return device registry information for this entity."""
         base_info = {
-            "connections": {(self.gateway.gatewayid, self.unique_id)},
-            "identifiers": {(DOMAIN, f"{self.gateway.wp_ver}_{split_dt(self._device.type)}")},
+            "connections": {(self.hub.hubId, self.unique_id)},
+            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{split_dt(self._device.type)}")},
             "manufacturer": "HDC Labs Co., Ltd.",
-            "model": self.gateway.wp_ver,
-            "name": f"{self.gateway.name} {split_dt(self._device.type)}",
-            "sw_version": self.gateway.version,
-            "via_device": (DOMAIN, self.gateway.gatewayid),
+            "model": self.hub.wp_version,
+            "name": f"{self.hub.name} {split_dt(self._device.type)}",
+            "sw_version": self.hub.sw_version,
+            "via_device": (DOMAIN, self.hub.hubId),
         }
         if self._device.type in MAIN_DEVICES:
-            base_info["identifiers"] = {(DOMAIN, f"{self.gateway.wp_ver}_{self.gateway.model}")}
+            base_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")}
+            base_info["name"] = f"{self.hub.name}"
         return base_info
 
     async def _on_command(self, data: Any = None, **kwargs):
@@ -57,10 +58,10 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     TYPE = ""
 
-    def __init__(self, device, gateway):
+    def __init__(self, device, hub):
         """Set up device and update callbacks."""
-        super().__init__(device, gateway)
-        self.gateway.entities[self.TYPE].add(self.unique_id)
+        super().__init__(device, hub)
+        self.hub.entities[self.TYPE].add(self.unique_id)
 
     @property
     def entity_registry_enabled_default(self):
@@ -74,8 +75,8 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
-        if self.unique_id in self.gateway.hass.data[DOMAIN]:
-            self.gateway.entities[self.TYPE].remove(self.unique_id)
+        if self.unique_id in self.hub.hass.data[DOMAIN]:
+            self.hub.entities[self.TYPE].remove(self.unique_id)
         self._device.on_remove(self.unique_id)
 
     @callback
@@ -89,9 +90,9 @@ class BestinDevice(BestinBase, RestoreEntity):
         self.async_schedule_update_ha_state()
 
     @property
-    def available(self):
+    def available(self) -> bool:
         """Return True if device is available."""
-        return self.gateway.available
+        return self.hub.available
 
     @property
     def name(self) -> str:
@@ -101,13 +102,16 @@ class BestinDevice(BestinBase, RestoreEntity):
     @property
     def should_poll(self) -> bool:
         """Determine if the device should be polled."""
-        return self.gateway.is_polling
+        return self.hub.is_polling
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict:
         """Return the state attributes of the sensor."""
-        return {
+        attributes = {
             "unique_id": self.unique_id,
             "device_room": self._device.room,
             "device_type": self._device.type,
         }
+        if self.should_poll:
+            attributes["last_update_time"] = self.hub.api.last_update_time
+        return attributes

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import (
@@ -11,15 +12,81 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
-LOGGER = logging.getLogger(__package__)
+PLATFORMS: list[Platform] = [
+    Platform.CLIMATE,
+    Platform.FAN,
+    Platform.LIGHT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
-DEFAULT_PORT = 8899
-DEFAULT_SCAN_INTERVAL = 15
-DEFAULT_MAX_TRANSMISSION = 10
+LOGGER: logging.Logger = logging.getLogger(__package__)
 
-# Fan
+DEFAULT_PORT: int = 8899
+DEFAULT_SCAN_INTERVAL: int = 15
+DEFAULT_MAX_TRANSMISSION: int = 10
+
+DEFAULT_PACKET_VIEWER: bool = False
+
+NEW_CLIMATE = "climates"
+NEW_FAN = "fans"
+NEW_LIGHT = "lights"
+NEW_SENSOR = "sensors"
+NEW_SWITCH = "switchs"
+
+MAIN_DEVICES: list[str] = [
+    "fan",
+    "ventil",
+    "gas",
+    "doorlock",
+    "elevator",
+    "elevator:floor",
+    "elevator:direction",
+]
+
+DEVICE_TYPE_MAP: dict[str] = {
+    "light": NEW_LIGHT,
+    "outlet": NEW_SWITCH,
+    "outlet:consumption": NEW_SENSOR,
+    "outlet:cutoff": NEW_SWITCH,
+    "thermostat": NEW_CLIMATE,
+    "energy": NEW_SENSOR,
+    "fan": NEW_FAN,
+    "gas": NEW_SWITCH,
+    "doorlock": NEW_SWITCH,
+    # Center
+    "electric": NEW_SWITCH,
+    "electric:cutoff": NEW_SWITCH,
+    "temper": NEW_CLIMATE,
+    "ventil": NEW_FAN,
+    "elevator": NEW_SWITCH,
+    "elevator:floor": NEW_SENSOR,
+    "elevator:direction": NEW_SENSOR,
+}
+
+DEVICE_PLATFORM_MAP: dict[str, Platform] = {
+    "light": Platform.LIGHT,
+    "outlet": Platform.SWITCH,
+    "outlet:consumption": Platform.SENSOR,
+    "outlet:cutoff": Platform.SWITCH,
+    "thermostat": Platform.CLIMATE,
+    "energy": Platform.SENSOR,
+    "fan": Platform.FAN,
+    "gas": Platform.SWITCH,
+    "doorlock": Platform.SWITCH,
+    # Center
+    "electric": Platform.SWITCH,
+    "electric:cutoff": Platform.SWITCH,
+    "temper": Platform.CLIMATE,
+    "ventil": Platform.FAN,
+    "elevator": Platform.SWITCH,
+    "elevator:floor": Platform.SENSOR,
+    "elevator:direction": Platform.SENSOR,
+}
+
+# Fan (Ventil)
 SPEED_STR_LOW = "low"
 SPEED_STR_MEDIUM = "mid"
 SPEED_STR_HIGH = "high"
@@ -31,140 +98,58 @@ SPEED_INT_HIGH = 3
 PRESET_NONE = "None"
 PRESET_NATURAL_VENTILATION = "Natural Ventilation"
 
-DEVICE_CONSUMPTION = "outlet:consumption"
-DEVICE_CUTOFF = "outlet:cutoff"
-DEVICE_DOORLOCK = "doorlock"
-DEVICE_ELEVATOR = "elevator"
-DEVICE_FLOOR = "elevator:floor"
-DEVICE_DIRECTION = "elevator:direction"
-DEVICE_ENERGY = "energy"
-DEVICE_FAN = "fan"
-DEVICE_GAS = "gas"
-DEVICE_LIGHT = "light"
-DEVICE_OUTLET = "outlet"
-DEVICE_THERMOSTAT = "thermostat"
-
-MAIN_DEVICES = [
-    DEVICE_DOORLOCK,
-    DEVICE_ELEVATOR,
-    DEVICE_FLOOR,
-    DEVICE_DIRECTION,
-    DEVICE_FAN,
-    DEVICE_GAS,
-]
-
-ELECTRIC_REALTIME = "electric:realtime"
-ELECTRIC_TOTAL = "electric:total"
-GAS_REALTIME = "gas:realtime"
-GAS_TOTAL = "gas:total"
-HEAT_REALTIME = "heat:realtime"
-HEAT_TOTAL = "heat:total"
-HOTWATER_REALTIME = "hotwater:realtime"
-HOTWATER_TOTAL = "hotwater:total"
-WATER_REALTIME = "water:realtime"
-WATER_TOTAL = "water:total"
-
-ATTR_ELECTRIC = "electric"
-ATTR_GAS = "gas"
-ATTR_HEAT = "heat"
-ATTR_HOTWATER = "hotwater"
-ATTR_WATER = "water"
-
-ELEMENT_BYTE_RANGE = {
-    ATTR_ELECTRIC: (slice(8, 12), slice(8, 12)),
-    ATTR_GAS: (slice(32, 36), slice(25, 29)),
-    ATTR_HEAT: (slice(40, 44), slice(40, 44)),
-    ATTR_HOTWATER: (slice(24, 28), slice(24, 28)),
-    ATTR_WATER: (slice(17, 20), slice(17, 20)),
+# Energy (HEMS) Index Map
+ELEMENT_BYTE_RANGE: dict[str, tuple[slice]] = {
+    "electric": (slice(8, 12), slice(8, 12)),
+    "gas": (slice(32, 36), slice(25, 29)),
+    "heat": (slice(40, 44), slice(40, 44)),
+    "hotwater": (slice(24, 28), slice(24, 28)),
+    "water": (slice(17, 20), slice(17, 20)),
 }
-
-ELEMENT_DEVICE_CLASS = {
-    DEVICE_CONSUMPTION: UnitOfPower.WATT,
-    ELECTRIC_REALTIME: SensorDeviceClass.POWER,
-    ELECTRIC_TOTAL: SensorDeviceClass.ENERGY,
-    GAS_TOTAL: SensorDeviceClass.GAS,
-    WATER_TOTAL: SensorDeviceClass.WATER,
+# Energy (HEMS) Class Map
+ELEMENT_DEVICE_CLASS: dict[str, UnitOfPower | SensorDeviceClass] = {
+    "outlet:consumption": UnitOfPower.WATT,
+    "electric:realtime": SensorDeviceClass.POWER,
+    "electric:total": SensorDeviceClass.ENERGY,
+    "gas:total": SensorDeviceClass.GAS,
+    "water:total": SensorDeviceClass.WATER,
 }
-
-ELEMENT_UNIT = {
-    DEVICE_CONSUMPTION: UnitOfPower.WATT,
-    ELECTRIC_REALTIME: UnitOfPower.WATT,
-    ELECTRIC_TOTAL: UnitOfEnergy.KILO_WATT_HOUR,
-    GAS_REALTIME: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
-    GAS_TOTAL: UnitOfVolume.CUBIC_METERS,
-    HEAT_REALTIME: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
-    HEAT_TOTAL: UnitOfVolume.CUBIC_METERS,
-    HOTWATER_REALTIME: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
-    HOTWATER_TOTAL: UnitOfVolume.CUBIC_METERS,
-    WATER_REALTIME: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
-    WATER_TOTAL: UnitOfVolume.CUBIC_METERS,
+# Energy (HEMS) Unit Map
+ELEMENT_UNIT: dict[str, UnitOfPower | UnitOfEnergy | UnitOfVolumeFlowRate | UnitOfVolume] = {
+    "outlet:consumption": UnitOfPower.WATT,
+    "electric:realtime": UnitOfPower.WATT,
+    "electric:total": UnitOfEnergy.KILO_WATT_HOUR,
+    "gas:realtime": UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    "gas:total": UnitOfVolume.CUBIC_METERS,
+    "heat:realtime": UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    "heat:total": UnitOfVolume.CUBIC_METERS,
+    "hotwater:realtime": UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    "hotwater:total": UnitOfVolume.CUBIC_METERS,
+    "water:realtime": UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    "water:total": UnitOfVolume.CUBIC_METERS,
 }
-
-ELEMENT_VALUE_CONVERSION = {
-    DEVICE_CONSUMPTION: lambda value: value,
-    DEVICE_FLOOR: lambda value: value,
-    DEVICE_DIRECTION: lambda value: value,
-    ELECTRIC_TOTAL: lambda value: round(value / 100, 2),
-    ELECTRIC_REALTIME: lambda value: value,
-    GAS_TOTAL: lambda value: round(value / 1000, 2),
-    GAS_REALTIME: lambda value: value / 10,
-    HEAT_TOTAL: lambda value: round(value / 1000, 2),
-    HEAT_REALTIME: [
+# Energy (HEMS) Value Convert
+ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
+    "outlet:consumption": lambda value: value,
+    "elevator:floor": lambda value: value,
+    "elevator:direction": lambda value: value,
+    "electric:total": lambda value: round(value / 100, 2),
+    "electric:realtime": lambda value: value,
+    "gas:total": lambda value: round(value / 1000, 2),
+    "gas:realtime": lambda value: value / 10,
+    "heat:total": lambda value: round(value / 1000, 2),
+    "heat:realtime": [
         lambda value: value,
         lambda value: value / 1000
     ],
-    HOTWATER_TOTAL: lambda value: round(value / 1000, 2),
-    HOTWATER_REALTIME: [
+    "hotwater:total": lambda value: round(value / 1000, 2),
+    "hotwater:realtime": [
         lambda value: value,
         lambda value: value / 1000
     ],
-    WATER_TOTAL: lambda value: round(value / 1000, 2),
-    WATER_REALTIME: [
+    "water:total": lambda value: round(value / 1000, 2),
+    "water:realtime": [
         lambda value: value,
         lambda value: value / 1000,
     ],
 }
-
-NEW_CLIMATE = "climates"
-NEW_FAN = "fans"
-NEW_LIGHT = "lights"
-NEW_SENSOR = "sensors"
-NEW_SWITCH = "switchs"
-
-DEVICE_TYPE_MAP = {
-    DEVICE_CONSUMPTION: NEW_SENSOR,
-    DEVICE_CUTOFF: NEW_SWITCH,
-    DEVICE_DOORLOCK: NEW_SWITCH,
-    DEVICE_ELEVATOR: NEW_SWITCH,
-    DEVICE_FLOOR: NEW_SENSOR,
-    DEVICE_DIRECTION: NEW_SENSOR,
-    DEVICE_ENERGY: NEW_SENSOR,
-    DEVICE_FAN: NEW_FAN,
-    DEVICE_GAS: NEW_SWITCH,
-    DEVICE_LIGHT: NEW_LIGHT,
-    DEVICE_OUTLET: NEW_SWITCH,
-    DEVICE_THERMOSTAT: NEW_CLIMATE,
-}
-
-DEVICE_PLATFORM_MAP = {
-    DEVICE_CONSUMPTION: Platform.SENSOR,
-    DEVICE_CUTOFF: Platform.SWITCH,
-    DEVICE_DOORLOCK: Platform.SWITCH,
-    DEVICE_ELEVATOR: Platform.SWITCH,
-    DEVICE_FLOOR: Platform.SENSOR,
-    DEVICE_DIRECTION: Platform.SENSOR,
-    DEVICE_ENERGY: Platform.SENSOR,
-    DEVICE_FAN: Platform.FAN,
-    DEVICE_GAS: Platform.SWITCH,
-    DEVICE_LIGHT: Platform.LIGHT,
-    DEVICE_OUTLET: Platform.SWITCH,
-    DEVICE_THERMOSTAT: Platform.CLIMATE,
-}
-
-PLATFORMS = [
-    Platform.CLIMATE,
-    Platform.FAN,
-    Platform.LIGHT,
-    Platform.SENSOR,
-    Platform.SWITCH,
-]
