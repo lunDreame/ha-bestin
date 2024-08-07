@@ -358,7 +358,7 @@ class BestinHub:
         """Create or update device entry in Home Assistant registry."""
         device_registry = dr.async_get(self.hass)
         device_registry.async_get_or_create(
-            entry_id=self.entry.entry_id,
+            config_entry_id=self.entry.entry_id,
             connections={(DOMAIN, self.hubId)},
             identifiers={(DOMAIN, self.hubId)},
             manufacturer="HDC Labs Co., Ltd.",
