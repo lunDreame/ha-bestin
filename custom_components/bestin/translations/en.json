@@ -48,26 +48,27 @@
             "error_login": "Login failed {err}",
             "error_network": "Network error",
             "unknown": "Unknown error"
-        },
-        "options": {
-            "step": {
-                "init": {
-                    "title": "Adjust User Options",
-                    "data": {
-                        "max_transmission": "Max Transmission",
-                        "packet_viewer": "Packet Viewer",
-                        "scan_interval": "Scan Interval (minutes)"
-                    }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Adjust User Options",
+                "description": "Adjust the maximum number of transmissions and packet viewer for local communication, and the scan interval for smart home integration.",
+                "data": {
+                    "max_transmission": "Max Transmission",
+                    "packet_viewer": "Packet Viewer",
+                    "scan_interval": "Scan Interval (minutes)"
                 }
-            },
-            "abort": {
-                "single_instance_allowed": "Only a single configuration is allowed."
-            },
-            "error": {
-                "error_login": "Login failed {err}",
-                "error_network": "Network error",
-                "unknown": "Unknown error"
             }
+        },
+        "abort": {
+            "single_instance_allowed": "Only a single configuration is allowed."
+        },
+        "error": {
+            "error_login": "Login failed {err}",
+            "error_network": "Network error",
+            "unknown": "Unknown error"
         }
     }
 }

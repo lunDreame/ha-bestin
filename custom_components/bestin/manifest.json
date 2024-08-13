@@ -11,7 +11,7 @@
     "codeowners": [
         "@lunDreame"
     ],
-    "version": "1.2.0",
+    "version": "1.2.1",
     "iot_class": "local_push",
     "loggers": [
         "custom_components.bestin"

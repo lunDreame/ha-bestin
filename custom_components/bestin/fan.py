@@ -62,6 +62,8 @@ class BestinFan(BestinDevice, FanEntity):
         """Initialize the fan."""
         super().__init__(device, hub)
         self._supported_features = FanEntityFeature.SET_SPEED
+        self._supported_features |= FanEntityFeature.TURN_ON
+        self._supported_features |= FanEntityFeature.TURN_OFF
         self._speed_list = device.state.get("speed_list")
         self._preset_modes = device.state.get("preset_modes")
         self._version_exists = getattr(hub.api, "version", False)
