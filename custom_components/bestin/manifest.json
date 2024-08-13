@@ -1,19 +1,16 @@
 {
-    "domain": "bestin",
-    "name": "BESTIN",
-    "config_flow": true,
-    "documentation": "https://github.com/lunDreame/ha-bestin",
-    "requirements": [
-        "pyserial-asyncio",
-        "xmltodict"
-    ],
-    "dependencies": [],
-    "codeowners": [
-        "@lunDreame"
-    ],
-    "version": "1.2.1",
-    "iot_class": "local_push",
-    "loggers": [
-        "custom_components.bestin"
-    ]
+  "domain": "bestin",
+  "name": "BESTIN",
+  "codeowners": [
+    "@lunDreame"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "pyserial-asyncio",
+    "xmltodict"
+  ],
+  "documentation": "https://github.com/lunDreame/ha-bestin",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/lunDreame/ha-bestin/issues",
+  "version": "1.2.1"
 }
