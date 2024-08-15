@@ -5,57 +5,47 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, LOGGER, PLATFORMS
-from .gateway import BestinGateway
+from .hub import BestinHub
 
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the BESTIN integration."""
-    return True
+    hub = BestinHub(hass, entry)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
 
+    LOGGER.debug(f"entry_data: {entry.data}, unique_id: {entry.unique_id}")
 
-async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Set up the BESTIN integration."""
-    gateway: BestinGateway = BestinGateway(hass, config_entry)
-    hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = gateway
+    if "version" not in entry.data:
+        if not await hub.connect():
+            LOGGER.debug(f"Hub connection failed: {hub.hub_id}")
+            await hub.shutdown()
+            hass.data[DOMAIN].pop(entry.entry_id)
+            return False
 
-    if connected := gateway.connect():
-        LOGGER.debug(f"Gateway connected: {connected} (Host: {gateway.host})")
-        
-        await gateway.async_load_entity_registry()
-        await gateway.async_initialize_gateway()
-        
-        await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
-
-        config_entry.async_on_unload(
-            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown)
-        )
-        config_entry.async_on_unload(
-            config_entry.add_update_listener(_async_update_listener)
-        )
+        LOGGER.debug(f"Hub connected: {hub.hub_id}")
+        await hub.async_initialize_serial()
     else:
-        LOGGER.debug("Gateway connection failed")
-        
-        hass.data[DOMAIN][config_entry.entry_id].shutdown()
-        hass.data[DOMAIN].pop(config_entry.entry_id)
-        return False
+        await hub.async_initialize_center()
+    
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.shutdown))
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
-
-async def _async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
-    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.config_entries.async_reload(entry.entry_id)
 
-
-async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the BESTIN integration."""
     if unload_ok := await hass.config_entries.async_unload_platforms(
-        config_entry, PLATFORMS
+        entry, PLATFORMS
     ):
-        hass.data[DOMAIN][config_entry.entry_id].shutdown()
-        hass.data[DOMAIN].pop(config_entry.entry_id)
-
+        hub: BestinHub = hass.data[DOMAIN].pop(entry.entry_id)
+        await hub.async_close()
+    
     return unload_ok

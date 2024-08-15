@@ -1,41 +1,56 @@
 import re
-import time
-import queue
-import threading
-from typing import Any, Callable, Optional
-from dataclasses import dataclass, field
+import asyncio
+import traceback
+from typing import Any, Optional, Callable
 
 from homeassistant.components.climate import HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.const import Platform
 
 from .const import (
     DOMAIN,
     LOGGER,
-    DEFAULT_MAX_TRANSMISSIONS,
+    DEFAULT_MAX_TRANSMISSION,
+    DEFAULT_PACKET_VIEWER,
+    PRESET_NATURAL_VENTILATION,
+    PRESET_NONE,
     ELEMENT_BYTE_RANGE,
     DEVICE_TYPE_MAP,
     DEVICE_PLATFORM_MAP,
-    PRESET_NATURAL,
-    PRESET_NONE,
+    SPEED_INT_LOW,
+    SPEED_INT_MEDIUM,
+    SPEED_INT_HIGH,
+    Device,
+    DeviceInfo,
 )
 
 
-@dataclass
-class DeviceProfile:
-    """Create an initial device profile."""
-    unique_id: str
-    name: str
-    type: str
-    room: str
-    state: dict
-    platform: str
-    on_register: Callable
-    on_remove: Callable
-    on_command: Callable
-    on_update: Optional[Callable] = field(default=None)
+class AsyncQueue:
+    def __init__(self):
+        self.queue = asyncio.Queue()
 
+    async def put(self, item):
+        """Function to put data into the queue"""
+        await self.queue.put(item)
+    
+    async def get(self):
+        """Function to get data from the queue (only retrieve, not delete)"""
+        if not self.queue.empty():
+            item = await self.queue.get()
+            await self.queue.put(item)
+            return item
+        return None
+    
+    async def delete(self):
+        """Function to delete data from the queue"""
+        if not self.queue.empty():
+            return await self.queue.get()
+        return None
+    
+    async def size(self):
+        """Function to return the size of the queue"""
+        return self.queue.qsize()
+    
 
 class BestinController:
     """Bestin Controller Class."""
@@ -43,48 +58,52 @@ class BestinController:
     def __init__(
         self, 
         hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        entities,
-        host, 
-        connection,
-        async_add_device,
+        entry: ConfigEntry,
+        entities: dict,
+        hub_id: str, 
+        communicator,
+        async_add_device: Callable,
     ) -> None:
         self.hass = hass
-        self.config_entry = config_entry
+        self.entry = entry
         self.entities = entities
-        self.host = host
-        self.connection = connection
+        self.hub_id = hub_id
+        self.communicator = communicator
         self.async_add_device = async_add_device
-        self.gateway_type: str = config_entry.data["gateway_mode"][0]
-        self.room_to_command: dict[bytes] = config_entry.data["gateway_mode"][1]
+        self.gateway_type: str = entry.data["gateway_mode"][0]
+        self.room_to_command: dict[bytes] = entry.data["gateway_mode"][1]
         
-        self.devices: dict[str, dict] = {}
-        self.packet_queue: queue.Queue = queue.Queue()
+        self.devices: dict = {}
+        self.stop_event: asyncio.Event = asyncio.Event()
+        self.queue: AsyncQueue = AsyncQueue()
+        self.tasks: list = []
 
-        self.stop_event: threading.Event = threading.Event()
-        self.process_thread = threading.Thread(
-            target=self.process_data, args=(self.stop_event,)
-        )
-    
+    async def start(self) -> None:
+        """Start main loop with asyncio."""
+        self.stop_event.clear()
+        await asyncio.sleep(1)
+        self.tasks.append(asyncio.create_task(self.process_incoming_data()))
+
+    async def stop(self) -> None:
+        """Stop main loop and cancel all tasks."""
+        self.stop_event.set()
+        for task in self.tasks:
+            task.cancel()
+
     @property
-    def available(self) -> bool:
-        """Check if the connection is alive"""
-        return self.connection.is_connected()
+    def is_alive(self) -> bool:
+        """Check if the communicator is alive"""
+        return self.communicator.is_connected()
     
-    @property
-    def receive_data(self) -> bytes:
-        """Receive data from connection."""
-        if self.available:
-            return self.connection.receive()
+    async def receive_data(self) -> bytes:
+        """Receive data from communicator."""
+        if self.is_alive:
+            return await self.communicator.receive()
 
-    def send_data(self, packet: bytearray):
-        """Send packet data to the connection."""
-        if self.available:
-            self.connection.send(packet)
-
-    def start(self):
-        """process_thread Starts threading."""
-        self.process_thread.start()
+    async def send_data(self, packet: bytearray) -> None:
+        """Send packet data to the communicator."""
+        if self.is_alive:
+            await self.communicator.send(packet)
 
     def calculate_checksum(self, packet: bytearray) -> int:
         """Compute checksum from packet data."""
@@ -105,7 +124,7 @@ class BestinController:
             checksum = (checksum + 1) & 0xFF
         return checksum == packet[-1]
 
-    def convert_unique_id(self, unique_id: str) -> tuple[str] | None:
+    def convert_unique_id(self, unique_id: str) -> tuple[str, Optional[str]]:
         """Convert device_id, sub_id from unique_id."""
         parts = unique_id.split("-")[0].split("_")
         if len(parts) > 3:
@@ -118,49 +137,12 @@ class BestinController:
         return device_id, sub_id
 
     def get_devices_from_domain(self, domain: str) -> list[dict]:
-        """Get devices registered to an entity based on domain."""
-        entity_list = self.entities.get(domain, set())
-        return [self._initialize_device(
-            *self.convert_unique_id(uid), None) for uid in entity_list
-        ]
-    
-    @property
-    def lights(self) -> list:
-        """Loads a device in the light domain from an entity."""
-        return self.get_devices_from_domain(Platform.LIGHT)
-
-    @property
-    def switchs(self) -> list:
-        """Loads a device in the switch domain from an entity."""
-        return self.get_devices_from_domain(Platform.SWITCH)
-    
-    @property
-    def sensors(self) -> list:
-        """Loads a device in the sensor domain from an entity."""
-        return self.get_devices_from_domain(Platform.SENSOR)
-
-    @property
-    def climates(self) -> list:
-        """Loads a device in the climate domain from an entity."""
-        return self.get_devices_from_domain(Platform.CLIMATE)
-    
-    @property
-    def fans(self) -> list:
-        """Loads a device in the fan domain from an entity."""
-        return self.get_devices_from_domain(Platform.FAN)
-    
-    def on_register(self, unique_id: str, update: Callable) -> None:
-        """Register a callback function for updates."""
-        self.devices[unique_id].on_update = update
-        LOGGER.debug(f"Callback registered for device with unique_id: {unique_id}")
-
-    def on_remove(self, unique_id: str) -> None:
-        """Remove a registered callback function."""
-        self.devices[unique_id].on_update = None
-        LOGGER.debug(f"Callback removed for device with unique_id: {unique_id}")
+        """Retrieve devices associated with a specific domain."""
+        entity_list = self.entities.get(domain, [])
+        return [self.devices.get(uid, {}) for uid in entity_list]
 
     def make_light_packet(
-        self, room_id: int, pos_id: int, sub_type: str, value: bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool
     ) -> bytearray:
         """Create a light control packet."""
         aio_gateway = self.gateway_type == "AIO"
@@ -170,11 +152,11 @@ class BestinController:
         
         if aio_gateway:
             room_id_conv = 0x50 + room_id
-            packet = self.make_common_packet(room_id_conv, 0x0A, 0x12)
+            packet = self.make_common_packet(room_id_conv, 0x0A, 0x12, timestamp)
             packet[5] = onoff_value
             packet[6] = 10 if pos_id == 4 else 1 << pos_id
         else:
-            packet = self.make_common_packet(0x31, 0x0D, 0x01)
+            packet = self.make_common_packet(0x31, 0x0D, 0x01, timestamp)
             packet[5] = room_id & 0x0F
             packet[6] = (0x01 << pos_id) | position_flag
             packet[11] = onoff_value2
@@ -183,7 +165,7 @@ class BestinController:
         return packet
     
     def make_outlet_packet(
-        self, room_id: int, pos_id: int, sub_type: str | None, value: bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str | None, value: bool
     ) -> bytearray:
         """Create an outlet control packet."""
         aio_gateway = self.gateway_type == "AIO"
@@ -193,9 +175,9 @@ class BestinController:
 
         if aio_gateway:
             room_id_conv = 0x50 + room_id 
-            packet = self.make_common_packet(room_id_conv, 0x0C, 0x12)
+            packet = self.make_common_packet(room_id_conv, 0x0C, 0x12, timestamp)
         else:
-            packet = self.make_common_packet(0x31, 0x0D, 0x01)
+            packet = self.make_common_packet(0x31, 0x0D, 0x01, timestamp)
             packet[5] = room_id & 0x0F
 
         if aio_gateway:
@@ -213,15 +195,13 @@ class BestinController:
         return packet
     
     def make_thermostat_packet(
-        self, room_id: int, pos_id: int, sub_type: str, value: float | bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool | float
     ) -> bytearray:
         """Create an thermostat control packet."""
-        packet = self.make_common_packet(0x28, 14, 0x12)
+        packet = self.make_common_packet(0x28, 14, 0x12, timestamp)
         packet[5] = room_id & 0x0F
         
-        if sub_type == "preset":
-            pass
-        elif sub_type == "set_temperature":
+        if sub_type == "set_temperature":
             value_int = int(value)
             value_float = value - value_int
             packet[7] = value_int & 0xFF
@@ -234,31 +214,31 @@ class BestinController:
         return packet
     
     def make_gas_packet(
-        self, room_id: int, pos_id: int, sub_type: str, value: bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool
     ) -> bytearray:
         """Create an gas control packet."""
         packet = bytearray(
-            [0x02, 0x31, 0x02, self.timestamp & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+            [0x02, 0x31, 0x02, timestamp & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         )
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
     def make_doorlock_packet(
-        self, room_id: int, pos_id: int, sub_type: str, value: bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool
     ) -> bytearray:
         """Create an doorlock control packet."""
         packet = bytearray(
-            [0x02, 0x41, 0x02, self.timestamp & 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+            [0x02, 0x41, 0x02, timestamp & 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
         )
         packet[-1] = self.calculate_checksum(packet)
         return packet
 
     def make_fan_packet(
-        self, room_id: int, pos_id: int, sub_type: str, value: int | bool
+        self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool | int
     ) -> bytearray:
         """Create an fan control packet."""
         packet = bytearray(
-            [0x02, 0x61, 0x00, self.timestamp & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+            [0x02, 0x61, 0x00, timestamp & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         )
         if sub_type == "speed":
             packet[2] = 0x03
@@ -275,7 +255,7 @@ class BestinController:
         return packet
     
     @callback
-    def on_command(self, unique_id: str, value: Any, **kwargs: dict | None) -> None:
+    async def on_command(self, unique_id: str, value: Any, **kwargs: Optional[dict]):
         """Queue a command for the device identified by unique_id."""
         parts = unique_id.split("-")[0].split("_")    
         device_type = parts[1]
@@ -284,8 +264,7 @@ class BestinController:
         sub_type = None
         
         if kwargs:
-            for st, v in kwargs.items():
-                sub_type, value = st, v
+            sub_type, value = next(iter(kwargs.items()))
         if len(parts) == 4 and not parts[3].isdigit():
             sub_type = parts[3]
         elif len(parts) == 4 and parts[3].isdigit():
@@ -295,94 +274,83 @@ class BestinController:
             sub_type = parts[3]
 
         queue_task = {
-            "attempt": 1,
+            "transmission": 1,
+            "timestamp": self.timestamp,
             "device_type": device_type,
             "room_id": room_id,
             "pos_id": pos_id,
             "sub_type": sub_type,
             "value": value,
-            "command": getattr(self, f"make_{device_type}_packet")(
-                room_id, pos_id, sub_type, value
-            ),
-            "resp": None, # ACK
+            "command": getattr(self, f"make_{device_type}_packet"),
+            "response": None,
         }
         LOGGER.debug(f"Create queue task: {queue_task}")
-        self.packet_queue.put(queue_task)
+        await self.queue.put(queue_task)
     
-    def initialize_device(
-        self,
-        device_id: str,
-        sub_id: str | None,
-        state: Any
-    ) -> dict[str, dict]:
+    def initialize_device(self, device_id: str, sub_id: Optional[str], state: Any) -> dict:
         """Initialize devices using a unique_id derived from device_id and sub_id."""
         device_type, device_room = device_id.split("_")
         
         base_unique_id = f"bestin_{device_id}"
         unique_id = f"{base_unique_id}_{sub_id}" if sub_id else base_unique_id
-        unique_id_with_host = f"{unique_id}-{self.host}"
+        full_unique_id = f"{unique_id}-{self.hub_id}"
         
-        if device_type != "energy" and (sub_id and not sub_id.isdigit()):
-            letter_sub_id = ''.join(re.findall(r'[a-zA-Z]', sub_id))
+        if device_type != "energy" and sub_id and not sub_id.isdigit():
+            letter_sub_id = ''.join(filter(str.isalpha, sub_id))
             device_type = f"{device_type}:{letter_sub_id}"
         
-        platform = DEVICE_PLATFORM_MAP[device_type]
+        platform = DEVICE_PLATFORM_MAP.get(device_type)
+        if not platform:
+            raise ValueError(f"Unsupported platform type for device: {device_type}")
 
-        if unique_id_with_host not in self.devices:
-            device = DeviceProfile(
-                unique_id=unique_id_with_host,
-                name=unique_id,
+        if full_unique_id not in self.devices:
+            device_info = DeviceInfo(
+                id=full_unique_id,
                 type=device_type,
+                name=unique_id,
                 room=device_room,
                 state=state,
-                platform=platform,
-                on_register=self.on_register,
-                on_remove=self.on_remove,
-                on_command=self.on_command,
             )
-            self.devices[unique_id_with_host] = device
+            device = Device(
+                info=device_info,
+                platform=platform,
+                on_command=self.on_command,
+                callbacks=set()
+            )
+            self.devices[full_unique_id] = device
 
-        return self.devices[unique_id_with_host]
+        return self.devices[full_unique_id]
     
-    def setup_device(
-        self,
-        device_id: str,
-        state: Any,
-        is_sub: bool = False
-    ) -> None:
-        """Set up device with specified state."""
-        if not device_id:
-            return
-
+    def setup_device(self, device_id: str, state: Any, is_sub=False) -> None:
+        """Set up device with specified state."""        
         device_type = device_id.split("_")[0]
         if device_type not in DEVICE_TYPE_MAP:
-            return
+            raise ValueError(f"Unsupported device type: {device_type}")
         
         final_states = state.items() if is_sub else [(None, state)]
         for sub_id, sub_state in final_states:
-            unique_id = f"bestin_{device_id}_{sub_id}" if sub_id else f"bestin_{device_id}"
-            unique_id_with_host = f"{unique_id}-{self.host}"
-
-            if device_type != "energy" and (sub_id and not sub_id.isdigit()):
-                letter_sub_id = ''.join(re.findall(r'[a-zA-Z]', sub_id))
-                new_device_type = DEVICE_TYPE_MAP[f"{device_type}:{letter_sub_id}"]
-            else:
-                new_device_type = DEVICE_TYPE_MAP[device_type]
-
             device = self.initialize_device(device_id, sub_id, sub_state)
-            self.async_add_device(new_device_type, device)
 
-            current_device = self.devices[unique_id_with_host]
-            if current_device and current_device.state != sub_state:
-                current_device.state = sub_state
-                if callable(current_device.on_update):
-                    current_device.on_update()
+            if device_type != "energy" and sub_id and not sub_id.isdigit():
+                letter_sub_id = ''.join(filter(str.isalpha, sub_id))
+                device_key = f"{device_type}:{letter_sub_id}"
+                _device_type = DEVICE_TYPE_MAP[device_key]
+            else:
+                _device_type = DEVICE_TYPE_MAP[device_type]
+            self.async_add_device(_device_type, device)
+
+            if device.info.state != sub_state:
+                device.info.state = sub_state
+                for callback in device.callbacks:
+                    assert callable(callback), "Callback should be callable"
+                    callback()
 
     def make_common_packet(
         self,
         header: int, # In case of AIO gateway, room_id is assigned
         length: int,
         packet_type: int,
+        timestamp: int,
     ) -> bytearray:
         """Create a base structure for common packets."""
         packet = bytearray([
@@ -390,7 +358,7 @@ class BestinController:
             header & 0xFF, 
             length & 0xFF, 
             packet_type & 0xFF, 
-            self.timestamp & 0xFF
+            timestamp & 0xFF
         ])
         packet.extend(bytearray([0] * (length - 5)))
         return packet
@@ -400,11 +368,11 @@ class BestinController:
         room_id = packet[5] & 0x0F
         is_heating = bool(packet[6] & 0x01)
         target_temperature = (packet[7] & 0x3F) + (packet[7] & 0x40 > 0) * 0.5
-        current_temperature = int.from_bytes(packet[8:10], byteorder='big') / 10.0
+        current_temperature = int.from_bytes(packet[8:10], byteorder="big") / 10.0
         hvac_mode = HVACMode.HEAT if is_heating else HVACMode.OFF
 
         thermostat_state = {
-            "mode": hvac_mode,
+            "hvac_mode": hvac_mode,
             "target_temperature": target_temperature,
             "current_temperature": current_temperature
         }
@@ -425,14 +393,15 @@ class BestinController:
     def parse_fan(self, packet: bytearray) -> tuple[int, dict]:
         """Fan parse from packet data."""
         room_id = 0
-        natural = packet[5] >> 4 & 1
-        preset_mode	= PRESET_NATURAL if natural else PRESET_NONE
+        is_natural_ventilation = bool(packet[5] >> 4 & 1)
+        preset_mode	= PRESET_NATURAL_VENTILATION if is_natural_ventilation else PRESET_NONE
 
         fan_state = {
-            "state": bool(packet[5] & 0x01),
+            "is_on": bool(packet[5] & 0x01),
             "speed": packet[6],
-            "timer": packet[7],
-            "preset": preset_mode,
+            "speed_list": [SPEED_INT_LOW, SPEED_INT_MEDIUM, SPEED_INT_HIGH],
+            "preset_modes": [PRESET_NATURAL_VENTILATION, PRESET_NONE],
+            "preset_mode": preset_mode,
         }
         return room_id, fan_state
     
@@ -454,7 +423,7 @@ class BestinController:
             idx2 = idx + 2
 
             if len(packet) > idx2:
-                value = int.from_bytes(packet[idx:idx2], byteorder='big')
+                value = int.from_bytes(packet[idx:idx2], byteorder="big")
                 consumption = value / 10.
             else:
                 consumption = 0.
@@ -511,47 +480,56 @@ class BestinController:
 
         return energy_state
 
-    def evaluate_command_packet(self, packet: bytes, queue: list[dict]) -> None:
-        """Processes data related to the response after the command."""
-        general_gateway = self.gateway_type == "General"
-        command = queue["command"]
-        header_byte = command[1]
+    def check_command_response_packet(self, packet: bytes, queue: dict) -> None:
+        """Check the response packet after the command."""
+        try:
+            general_gateway = self.gateway_type == "General"
+            command = queue["command"](
+                queue["timestamp"], queue["room_id"], queue["pos_id"], queue["sub_type"], queue["value"]
+            )
+            header_byte = command[1]
 
-        offset = 2 if general_gateway and len(command) == 10 else 3
-        command_4bit = 0x9 if not general_gateway or header_byte == 0x28 else 0x8
+            offset = 2 if general_gateway and len(command) == 10 else 3
+            command_4bit = 0x9 if not general_gateway or header_byte == 0x28 else 0x8
 
-        overview = (command_4bit << 4) | (command[offset] & 0x0F) # Line 0-3
-        packet_value = packet[offset]
+            overview = (command_4bit << 4) | (command[offset] & 0x0F)  # Line 0-3
+            packet_value = packet[offset]
 
-        if header_byte == packet[1] and (
-            overview == packet_value or packet_value == 0x81
-        ):
-            queue["resp"] = packet
+            if header_byte == packet[1] and (overview == packet_value or packet_value == 0x81):
+                queue["response"] = packet
+        except Exception as e:
+            LOGGER.error("Error in check_command_response_packet: %s", e)
 
-    def send_packet_queue(self, queue: dict[str, Any]) -> None:
+    async def send_packet_queue(self, queue: dict) -> None:
         """Sends queued command packet data."""
-        LOGGER.info(
-            "Send the %s command of the %s device. command Packet: %s, attempts: %s",
-            queue["value"],
-            queue["device_type"],
-            queue["command"].hex(),
-            queue["attempt"],
-        )
-        queue["attempt"] += 1
-        self.send_data(queue["command"])
+        try:
+            queue["timestamp"] += 1
+            command = queue["command"](
+                queue["timestamp"], queue["room_id"], queue["pos_id"], queue["sub_type"], queue["value"]
+            )
 
-    def parse_packet_data(self, packet: bytes) -> None:
-        """Parse the packet data to get the status of the device."""
+            LOGGER.info(
+                "Sending %s command for %s device. Command Packet: %s, attempts: %d",
+                queue["value"], queue["device_type"], command.hex(), queue["transmission"]
+            )
+            queue["transmission"] += 1
+            await self.send_data(command)
+        except Exception as e:
+            LOGGER.error("Error in send_packet_queue: %s", e)
+
+    def handle_device_packet(self, packet: bytes) -> None:
+        """Parse and process an incoming device packet."""
         header = packet[1]
         packet_len = len(packet)
         room_id = device_state = device_id = None
+        self.timestamp = 0x00
 
         if packet_len == 10:
             command = packet[2]
-            self.timestamp = packet[3]
+            #self.timestamp = packet[3]
         else:
             command = packet[3]
-            self.timestamp = packet[4]
+            #self.timestamp = packet[4]
 
         if packet_len != 10 and command in [0x81, 0x82, 0x91, 0x92, 0xB2]:
             if header == 0x28:
@@ -562,12 +540,12 @@ class BestinController:
                 room_id, device_state = getattr(self, f"parse_state_{self.gateway_type}")(packet)
                 for device, state in device_state.items():
                     device_id = f"{device}_{room_id}"
-                    self.setup_device(device_id, state, True)
+                    self.setup_device(device_id, state, is_sub=True)
             elif header == 0xD1:
                 device_state = self.parse_energy(packet)
                 for room_id, state in device_state.items():
                     device_id = f"energy_{room_id}"
-                    self.setup_device(device_id, state, True)
+                    self.setup_device(device_id, state, is_sub=True)
 
         elif packet_len == 10 and command != 0x00:
             parser_mapping = {
@@ -581,40 +559,43 @@ class BestinController:
                 device_id = f"{device_type}_{room_id}"
                 self.setup_device(device_id, device_state)
 
-    def process_packet_queue(self) -> None:
-        """Processes queued command packet data."""
-        queue = self.packet_queue.queue[0]
-        max_transmissions = self.config_entry.options.get(
-            "max_transmissions", DEFAULT_MAX_TRANSMISSIONS
-        )
-        self.send_packet_queue(queue)
+    async def handle_packet_queue(self, queue: dict) -> None:
+        """Processes the queued command packet data."""
+        try:
+            await self.send_packet_queue(queue)
+            max_transmission = self.entry.options.get("max_transmission", DEFAULT_MAX_TRANSMISSION)
 
-        if resp := queue["resp"]:
-            LOGGER.info(
-                "Command successful for %s device (value: %s), ACK: %s, Attempts: %s",
-                queue["device_type"].capitalize(),
-                queue["value"],
-                resp.hex(),
-                queue["attempt"],
-            )
-            self.packet_queue.get()
+            if response := queue["response"]:
+                LOGGER.info(
+                    "Device: %s, Value: %s - Command successful. Response: %s, Attempts: %d",
+                    queue["device_type"], queue["value"], response.hex(), queue["transmission"]
+                )
+                await self.queue.delete()
+            elif queue["transmission"] > max_transmission:
+                LOGGER.warning(
+                    "Device: %s - Command failed after %d attempts. Operation cancelled.",
+                    queue["device_type"], max_transmission
+                )
+                await self.queue.delete()
+        except Exception as e:
+            LOGGER.error("Error in handle_packet_queue: %s", e)
 
-        elif queue["attempt"] > max_transmissions:
-            LOGGER.info(
-                "Command for %s device exceeded %s attempts, cancelling operation",
-                queue["device_type"], max_transmissions
-            )
-            self.packet_queue.get()
+    async def process_incoming_data(self) -> None:
+        """Handles incoming data, processes it if valid, and manages a task queue."""
+        try:
+            while True:
+                if self.is_alive:
+                    received_data = await self.receive_data()
+                else:
+                    received_data = None
+                if received_data and self.verify_checksum(received_data):
+                    if self.entry.options.get("packet_viewer", DEFAULT_PACKET_VIEWER):
+                        LOGGER.debug("Received data: %s", received_data)
+                    self.handle_device_packet(received_data)
 
-    def process_data(self, stop_event: threading.Event) -> None:
-        """Processes received packet data and packet queue data.""" 
-        while not stop_event.is_set():
-            received_data = self.receive_data if self.available else None
-
-            if received_data and self.verify_checksum(received_data):
-                self.parse_packet_data(received_data)
-                if not self.packet_queue.empty():
-                    self.evaluate_command_packet(received_data, self.packet_queue.queue[0])
-
-            if not self.packet_queue.empty():
-                self.process_packet_queue()
+                    if await self.queue.size() > 0:
+                        queue_item = await self.queue.get()
+                        await self.handle_packet_queue(queue_item)
+                        self.check_command_response_packet(received_data, queue_item)
+        except Exception as e:
+            LOGGER.error("Error in process_incoming_data: %s", e)

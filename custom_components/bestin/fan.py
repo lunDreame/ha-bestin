@@ -18,45 +18,37 @@ from homeassistant.util.percentage import (
     percentage_to_ordered_list_item,
 )
 
-from .const import (
-    LOGGER,
-    NEW_FAN,
-    PRESET_NATURAL,
-    PRESET_NONE,
-    SPEED_HIGH,
-    SPEED_LOW,
-    SPEED_MEDIUM,
-)
+from .const import NEW_FAN, PRESET_NONE
 from .device import BestinDevice
-from .gateway import load_gateway_from_entry
+from .hub import load_hub
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup fan platform."""
-    gateway = load_gateway_from_entry(hass, config_entry)
-    gateway.entities[DOMAIN] = set()
+    hub = load_hub(hass, entry)
+    hub.entities[DOMAIN] = set()
 
     @callback
     def async_add_fan(devices=None):
         if devices is None:
-            devices = gateway.api.fans
+            devices = hub.api.get_devices_from_domain(DOMAIN)
 
         entities = [
-            BestinFan(device, gateway) 
+            BestinFan(device, hub) 
             for device in devices 
-            if device.unique_id not in gateway.entities[DOMAIN]
+            if device.info.id not in hub.entities[DOMAIN]
         ]
 
         if entities:
             async_add_entities(entities)
 
-    gateway.listeners.append(
+    hub.listeners.append(
         async_dispatcher_connect(
-            hass, gateway.async_signal_new_device(NEW_FAN), async_add_fan
+            hass, hub.async_signal_new_device(NEW_FAN), async_add_fan
         )
     )
     async_add_fan()
@@ -66,31 +58,37 @@ class BestinFan(BestinDevice, FanEntity):
     """Defined the Fan."""
     TYPE = DOMAIN
 
-    def __init__(self, device, gateway) -> None:
+    def __init__(self, device, hub) -> None:
         """Initialize the fan."""
-        super().__init__(device, gateway)
+        super().__init__(device, hub)
         self._supported_features = FanEntityFeature.SET_SPEED
-        self._supported_features |= FanEntityFeature.PRESET_MODE
-        self._speed_list = [SPEED_LOW, SPEED_MEDIUM, SPEED_HIGH]
-        self._preset_modes = [PRESET_NATURAL, PRESET_NONE]
+        self._supported_features |= FanEntityFeature.TURN_ON
+        self._supported_features |= FanEntityFeature.TURN_OFF
+        self._speed_list = device.info.state.get("speed_list")
+        self._preset_modes = device.info.state.get("preset_modes")
+        self._version_exists = getattr(hub.api, "version", False)
+
+        if self._preset_modes:
+            self._supported_features |= FanEntityFeature.PRESET_MODE
 
     @property
     def is_on(self) -> bool:
         """Return true if fan is on."""
-        return self._device.state["state"]
+        return self._device.info.state["is_on"]
 
     @property
-    def supported_features(self) -> int:
+    def supported_features(self) -> FanEntityFeature:
         """Flag supported features."""
         return self._supported_features
 
     @property
     def percentage(self) -> Optional[int]:
         """Return the current speed percentage."""
-        return ordered_list_item_to_percentage(
-            self._speed_list, self._device.state["speed"]
-        )
-
+        speed = self._device.info.state["speed"]
+        if speed == "off":
+            return 0
+        return ordered_list_item_to_percentage(self._speed_list, speed)
+    
     @property
     def speed_count(self) -> int:
         """Return the number of speeds the fan supports."""
@@ -98,16 +96,16 @@ class BestinFan(BestinDevice, FanEntity):
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the speed percentage of the fan."""
-        speed = (
-            percentage_to_ordered_list_item(self._speed_list, percentage)
-            if percentage > 0 else 0
-        )
-        self._on_command(speed=speed)
+        if percentage == 0:
+            await self._on_command("off" if self._version_exists else False)
+        else:
+            speed = percentage_to_ordered_list_item(self._speed_list, percentage)
+            await self._on_command(speed=speed)
 
     @property
-    def preset_mode(self):
+    def preset_mode(self) -> str:
         """Return the preset mode."""
-        return self._device.state["preset"]
+        return self._device.info.state["preset_mode"]
 
     @property
     def preset_modes(self) -> list:
@@ -116,7 +114,7 @@ class BestinFan(BestinDevice, FanEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the preset mode of the fan."""
-        self._on_command(
+        await self._on_command(
             preset=False if preset_mode == PRESET_NONE else preset_mode
         )
 
@@ -128,8 +126,8 @@ class BestinFan(BestinDevice, FanEntity):
         **kwargs: Any,
     ) -> None:
         """Turn on fan."""
-        self._on_command(True)
+        await self._on_command("low" if self._version_exists else True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off fan."""
-        self._on_command(False)
+        await self._on_command("off" if self._version_exists else False)

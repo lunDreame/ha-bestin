@@ -7,72 +7,62 @@ from typing import Any
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.core import callback
 
-from .const import DOMAIN, LOGGER, MAIN_DEVICES
+from .const import DOMAIN, MAIN_DEVICES
 
 
 def split_dt(dt: str) -> str:
     """
     Split the first part by a colon,
-    if there is no colon, it returns the entire string.
+    if there is no colon, return the entire string.
     """
-    if ":" in dt:
-        return dt.split(":")[0].title()
-    else:
-        return dt.title()
+    return dt.split(":")[0].title() if ":" in dt else dt.title()
 
 
 class BestinBase:
-    """Bestin Base Class."""
+    """Base class for BESTIN devices."""
 
-    def __init__(self, device, gateway):
-        """Setting up device and update callbacks."""
+    def __init__(self, device, hub):
+        """Set up device and update callbacks."""
         self._device = device
-        self.gateway = gateway
+        self.hub = hub
 
     @property
     def unique_id(self) -> str:
         """Return a unique ID."""
-        return self._device.unique_id
+        return self._device.info.id
 
     @property
     def device_info(self):
         """Return device registry information for this entity."""
-        if self._device.type in MAIN_DEVICES:
-            return {
-                "connections": {(self.gateway.host, self.unique_id)},
-                "identifiers": {(DOMAIN, f"{self.gateway.wp_ver}_{self.gateway.model}")},
-                "manufacturer": "HDC Labs Co., Ltd.",
-                "model": f"{self.gateway.wp_ver}-generation",
-                "name": self.gateway.name,
-                "sw_version": self.gateway.version,
-                "via_device": (DOMAIN, self.gateway.host),
-            }
-        else:
-            return {
-                "connections": {(self.gateway.host, self.unique_id)},
-                "identifiers": {
-                    (DOMAIN, f"{self.gateway.wp_ver}_{split_dt(self._device.type)}")
-                },
-                "manufacturer": "HDC Labs Co., Ltd.",
-                "model": f"{self.gateway.wp_ver}-generation",
-                "name": f"{self.gateway.name} {split_dt(self._device.type)}",
-                "sw_version": self.gateway.version,
-                "via_device": (DOMAIN, self.gateway.host),
-            }
+        base_info = {
+            "connections": {(self.hub.hub_id, self.unique_id)},
+            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{split_dt(self._device.info.type)}")},
+            "manufacturer": "HDC Labs Co., Ltd.",
+            "model": self.hub.wp_version,
+            "name": f"{self.hub.name} {split_dt(self._device.info.type)}",
+            "sw_version": self.hub.sw_version,
+            "via_device": (DOMAIN, self.hub.hub_id),
+        }
+        if self._device.info.type in MAIN_DEVICES:
+            base_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")}
+            base_info["name"] = f"{self.hub.name}"
 
-    def _on_command(self, data: Any = None, **kwargs):
-        """Set commands for the device."""
-        self._device.on_command(self.unique_id, data, **kwargs)
+        return base_info
+
+    async def _on_command(self, data: Any = None, **kwargs):
+        """Send commands to the device."""
+        await self._device.on_command(self.unique_id, data, **kwargs)
 
 
 class BestinDevice(BestinBase, RestoreEntity):
     """Define the Bestin Device entity."""
+
     TYPE = ""
 
-    def __init__(self, device, gateway):
-        """Setting up device and update callbacks."""
-        super().__init__(device, gateway)
-        self.gateway.entities[self.TYPE].add(self.unique_id)
+    def __init__(self, device, hub):
+        """Set up device and update callbacks."""
+        super().__init__(device, hub)
+        self.hub.entities[self.TYPE].add(self.unique_id)
 
     @property
     def entity_registry_enabled_default(self):
@@ -81,45 +71,46 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     async def async_added_to_hass(self):
         """Subscribe to device events."""
-        self._device.on_register(self.unique_id, self.async_update_callback)
+        self._device.add_callback(self.async_update_callback)
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
-        if self.unique_id in self.gateway.hass.data[DOMAIN]:
-            self.gateway.entities[self.TYPE].remove(self.unique_id)
-        self._device.on_remove(self.unique_id)
+        self._device.remove_callback(self.async_update_callback)
 
     @callback
     def async_restore_last_state(self, last_state) -> None:
         """Restore previous state."""
+        pass
 
     @callback
     def async_update_callback(self):
         """Update the device's state."""
-        self.schedule_update_ha_state()
+        self.async_schedule_update_ha_state()
 
     @property
-    def available(self):
+    def available(self) -> bool:
         """Return True if device is available."""
-        return self.gateway.available
+        return self.hub.available
 
     @property
     def name(self) -> str:
         """Return the name of the device."""
-        return self._device.name
+        return self._device.info.name
 
     @property
     def should_poll(self) -> bool:
-        """No polling needed for this device."""
-        return False
+        """Determine if the device should be polled."""
+        return self.hub.is_polling
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict:
         """Return the state attributes of the sensor."""
         attributes = {
             "unique_id": self.unique_id,
-            "device_room": self._device.room,
-            "device_type": self._device.type,
+            "device_room": self._device.info.room,
+            "device_type": self._device.info.type,
         }
+        if self.should_poll:
+            attributes["last_update_time"] = self.hub.api.last_update_time
         return attributes
