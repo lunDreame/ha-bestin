@@ -19,7 +19,7 @@
                 }
             },
             "center": {
-                "description": "각 섹션의 구성 방법은 [문서](https://github.com/lunDreame/ha-bestin/blob/asynchrony/guide/center.md)를 참고해 주세요.",
+                "description": "각 섹션의 구성 방법은 [문서](https://github.com/lunDreame/ha-bestin/blob/main/guide/center.md)를 참고해 주세요.",
                 "data": {
                     "version": "버전"
                 }

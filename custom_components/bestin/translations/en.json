@@ -19,7 +19,7 @@
                 }
             },
             "center": {
-                "description": "Please refer to the [documentation](https://github.com/lunDreame/ha-bestin/blob/asynchrony/guide/center.md) for instructions on configuring each section.",
+                "description": "Please refer to the [documentation](https://github.com/lunDreame/ha-bestin/blob/main/guide/center.md) for instructions on configuring each section.",
                 "data": {
                     "version": "Version"
                 }
