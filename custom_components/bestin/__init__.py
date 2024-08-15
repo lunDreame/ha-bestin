@@ -15,46 +15,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hub = BestinHub(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
 
-    LOGGER.debug(f"Entry data: {entry.data}, unique ID: {entry.unique_id}")
+    LOGGER.debug(f"entry_data: {entry.data}, unique_id: {entry.unique_id}")
 
     if "version" not in entry.data:
         if not await hub.connect():
-            LOGGER.debug("Hub connection failed")
+            LOGGER.debug(f"Hub connection failed: {hub.hub_id}")
             await hub.shutdown()
             hass.data[DOMAIN].pop(entry.entry_id)
             return False
 
-        LOGGER.debug(f"Hub connected: {hub.hubId}")
-        await hub.async_initialize_serial() # Serial
+        LOGGER.debug(f"Hub connected: {hub.hub_id}")
+        await hub.async_initialize_serial()
     else:
-        await hub.async_initialize_center() # Center
-
-    await hub.async_load_entity_registry()
-
-    entry.async_on_unload(
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.shutdown)
-    )
-    entry.async_on_unload(
-        entry.add_update_listener(_async_update_listener)
-    )
+        await hub.async_initialize_center()
+    
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.shutdown))
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
-
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
-
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the BESTIN integration."""
     if unload_ok := await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS
     ):
-        await hass.data[DOMAIN][entry.entry_id].shutdown()
-
-        hass.data[DOMAIN].pop(entry.entry_id)
-
+        hub: BestinHub = hass.data[DOMAIN].pop(entry.entry_id)
+        await hub.async_close()
+    
     return unload_ok

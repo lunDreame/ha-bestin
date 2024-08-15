@@ -29,23 +29,24 @@ class BestinBase:
     @property
     def unique_id(self) -> str:
         """Return a unique ID."""
-        return self._device.unique_id
+        return self._device.info.id
 
     @property
     def device_info(self):
         """Return device registry information for this entity."""
         base_info = {
-            "connections": {(self.hub.hubId, self.unique_id)},
-            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{split_dt(self._device.type)}")},
+            "connections": {(self.hub.hub_id, self.unique_id)},
+            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{split_dt(self._device.info.type)}")},
             "manufacturer": "HDC Labs Co., Ltd.",
             "model": self.hub.wp_version,
-            "name": f"{self.hub.name} {split_dt(self._device.type)}",
+            "name": f"{self.hub.name} {split_dt(self._device.info.type)}",
             "sw_version": self.hub.sw_version,
-            "via_device": (DOMAIN, self.hub.hubId),
+            "via_device": (DOMAIN, self.hub.hub_id),
         }
-        if self._device.type in MAIN_DEVICES:
+        if self._device.info.type in MAIN_DEVICES:
             base_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")}
             base_info["name"] = f"{self.hub.name}"
+
         return base_info
 
     async def _on_command(self, data: Any = None, **kwargs):
@@ -70,14 +71,12 @@ class BestinDevice(BestinBase, RestoreEntity):
 
     async def async_added_to_hass(self):
         """Subscribe to device events."""
-        self._device.on_register(self.unique_id, self.async_update_callback)
+        self._device.add_callback(self.async_update_callback)
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
-        if self.unique_id in self.hub.hass.data[DOMAIN]:
-            self.hub.entities[self.TYPE].remove(self.unique_id)
-        self._device.on_remove(self.unique_id)
+        self._device.remove_callback(self.async_update_callback)
 
     @callback
     def async_restore_last_state(self, last_state) -> None:
@@ -97,7 +96,7 @@ class BestinDevice(BestinBase, RestoreEntity):
     @property
     def name(self) -> str:
         """Return the name of the device."""
-        return self._device.name
+        return self._device.info.name
 
     @property
     def should_poll(self) -> bool:
@@ -109,8 +108,8 @@ class BestinDevice(BestinBase, RestoreEntity):
         """Return the state attributes of the sensor."""
         attributes = {
             "unique_id": self.unique_id,
-            "device_room": self._device.room,
-            "device_type": self._device.type,
+            "device_room": self._device.info.room,
+            "device_type": self._device.info.type,
         }
         if self.should_poll:
             attributes["last_update_time"] = self.hub.api.last_update_time

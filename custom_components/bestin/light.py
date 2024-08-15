@@ -12,8 +12,6 @@ from homeassistant.core import callback, HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from custom_components.bestin import switch
-
 from .const import NEW_LIGHT
 from .device import BestinDevice
 from .hub import load_hub
@@ -31,14 +29,14 @@ async def async_setup_entry(
     @callback
     def async_add_light(devices=None):
         if devices is None:
-            devices = hub.api.lights
+            devices = hub.api.get_devices_from_domain(DOMAIN)
 
         entities = [
             BestinLight(device, hub) 
             for device in devices 
-            if device.unique_id not in hub.entities[DOMAIN]
+            if device.info.id not in hub.entities[DOMAIN]
         ]
-
+        
         if entities:
             async_add_entities(entities)
 
@@ -74,7 +72,7 @@ class BestinLight(BestinDevice, LightEntity):
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        return self._device.state
+        return self._device.info.state
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""

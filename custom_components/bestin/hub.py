@@ -1,25 +1,23 @@
+import os
 import re
+import json
 import time
 import asyncio
+import aiofiles
+import serial_asyncio
+import socket
 import traceback
 
-import serial_asyncio # type: ignore
-import socket
-
-from typing import cast
+from typing import Optional, Callable, cast
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_IP_ADDRESS,
-    CONF_PORT,
+from homeassistant.const import CONF_IP_ADDRESS, CONF_PORT
+from homeassistant.core import HomeAssistant, Event, callback
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er
 )
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.dispatcher import dispatcher_send
-from homeassistant.helpers.entity_registry import (
-    async_entries_for_config_entry,
-    async_get
-)
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     DOMAIN,
@@ -215,25 +213,23 @@ def check_ip_or_serial(id: str) -> bool:
 class BestinHub:
     """Bestin Hub Class."""
 
-    def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Hub initialization."""
         self.hass = hass
         self.entry = entry
         self.api: BestinAPI | BestinController = None
         self.communicator: SerialSocketCommunicator = None
-        self.gateway_mode: tuple = None
-        self.entities: dict = {}
-        self.listeners: list = []
+        self.gateway_mode: tuple[str, Optional[dict[bytes]]] = None
+        self.entities: dict[str, set[str]] = {}
+        self.listeners: list[Callable] = []
 
     @property
-    def hubId(self) -> str:
+    def hub_id(self) -> str:
         """Return the hub's unique identifier."""
         return cast(str, self.entry.unique_id)
 
     @property
-    def ipAddress(self) -> str:
+    def ip_address(self) -> str:
         """Return the IP address config entry."""
         return cast(str, self.entry.data.get(CONF_IP_ADDRESS))
 
@@ -277,7 +273,7 @@ class BestinHub:
     @property
     def is_polling(self) -> bool:
         """Return whether to poll according to device characteristics."""
-        if check_ip_or_serial(self.hubId):
+        if check_ip_or_serial(self.hub_id):
             return False
         else:
             return True
@@ -285,7 +281,7 @@ class BestinHub:
     @property
     def wp_version(self) -> str:
         """Returns the version of the gateway."""
-        if check_ip_or_serial(self.hubId):
+        if check_ip_or_serial(self.hub_id):
             return f"{self.gateway_mode[0]}-generation"
         else:
             return f"Center-{self.version}"
@@ -293,10 +289,10 @@ class BestinHub:
     @property
     def conn_str(self) -> str:
         """Generate the connection string based on the host and port."""
-        if not re.match(r"/dev/tty(USB|AMA)\d+", self.hubId):
-            conn_str = f"{self.hubId}:{self.port}"
+        if not re.match(r"/dev/tty(USB|AMA)\d+", self.hub_id):
+            conn_str = f"{self.hub_id}:{self.port}"
         else:
-            conn_str = self.hubId
+            conn_str = self.hub_id
         return conn_str
     
     async def determine_gateway_mode(self) -> None:
@@ -336,90 +332,36 @@ class BestinHub:
                 f"Error during gateway mode determination: {e}. "
                 f"Problematic packet: {problematic_packet.hex() if problematic_packet else 'None'}"
             )
-        
-    async def async_load_entity_registry(self) -> None:
-        """Load entities from the registry and organize them by domain."""
-        entity_registry = async_get(self.hass)
-        get_entities = async_entries_for_config_entry(
-            entity_registry, self.entry.entry_id
-        )
-        for entity in get_entities:
-            domain = entity.entity_id.split(".")[0]
-            if domain not in self.entities:
-                self.entities[domain] = set()
-            if entity.unique_id not in self.entities[domain]:
-                self.entities[domain].add(entity.unique_id)
-            LOGGER.debug(
-                "Added entity '%s' with unique_id '%s' to domain '%s'",
-                entity.entity_id, entity.unique_id, domain
-            )
-
-    async def async_update_device_registry(self) -> None:
-        """Create or update device entry in Home Assistant registry."""
-        device_registry = dr.async_get(self.hass)
-        device_registry.async_get_or_create(
-            config_entry_id=self.entry.entry_id,
-            connections={(DOMAIN, self.hubId)},
-            identifiers={(DOMAIN, self.hubId)},
-            manufacturer="HDC Labs Co., Ltd.",
-            name=self.name,
-            model=self.wp_version,
-            sw_version=self.sw_version,
-            via_device=(DOMAIN, self.hubId),
-        )
-
-    def is_entity_registered(self, keyword: str) -> bool:
-        """Checks if any entity ID contains the given keyword."""
-        entity_registry = async_get(self.hass)
-        registered_entities = async_entries_for_config_entry(
-            entity_registry, self.entry.entry_id
-        )
-        LOGGER.debug(
-            "Entities found for config entry '%s': %s",
-            self.entry.entry_id, len(registered_entities)
-        )
-        matching_entities = [
-            entity.entity_id 
-            for entity in registered_entities
-            if keyword in entity.entity_id
-        ]
-        if matching_entities:
-            LOGGER.debug(f"Entities containing '{keyword}': {matching_entities}")
-        else:
-            LOGGER.debug(f"No entities containing '{keyword}'")
-
-        return len(matching_entities) > 0
 
     @callback
     def async_signal_new_device(self, device_type: str) -> str:
         """Return unique signal name for a new device."""
         new_device = {
-            NEW_LIGHT: "bestin_new_light",
-            NEW_SWITCH: "bestin_new_switch",
-            NEW_SENSOR: "bestin_new_sensor",
             NEW_CLIMATE: "bestin_new_climate",
             NEW_FAN: "bestin_new_fan",
+            NEW_LIGHT: "bestin_new_light",
+            NEW_SENSOR: "bestin_new_sensor",
+            NEW_SWITCH: "bestin_new_switch",
         }
-        return f"{new_device[device_type]}_{self.hubId}"
+        return f"{new_device[device_type]}_{self.hub_id}"
 
     @callback
     def async_add_device_callback(
         self, device_type: str, device=None, force: bool = False
     ) -> None:
         """Add device callback if not already registered."""
-        domain = device.platform
-        unique_id = device.unique_id
-
-        if (
-            unique_id in self.entities.get(domain, set()) or
-            unique_id in self.hass.data[DOMAIN]
-        ):
+        domain = device.platform.value
+        unique_id = device.info.id
+        
+        if (unique_id in self.entities.get(domain, [])
+            or unique_id in self.hass.data[DOMAIN]):   
             return
+        
         args = []
         if device is not None and not isinstance(device, list):
             args.append([device])
 
-        dispatcher_send(
+        async_dispatcher_send(
             self.hass,
             self.async_signal_new_device(device_type),
             *args,
@@ -434,17 +376,31 @@ class BestinHub:
         await self.communicator.connect()
         return self.available
     
-    @callback
-    async def shutdown(self) -> None:
-        """Shut down the connection and clear entities."""
+    async def async_close(self) -> None:
+        """Asynchronously close the connection and clean up."""
         LOGGER.debug(
-            "A shutdown call detects the current entity: %s and listener: %s and removes them.",
-            self.entities, self.listeners
+            "Starting to remove registered entities and listeners."
         )
+        
+        entity_registry = er.async_get(self.hass)
+        to_remove = {
+            f"{domain}.{unique_id.split('-')[0]}"
+            for domain, unique_ids in self.entities.items()
+            for unique_id in unique_ids
+        }
+        for entity_id in to_remove:
+            if entity_id in entity_registry.entities:
+                entity_registry.async_remove(entity_id)
+                LOGGER.debug("Removed entity from registry: %s", entity_id)
         self.listeners.clear()
-        for platform, entities in self.entities.items():
-            for unique_id in list(entities):
-                self.hass.data[DOMAIN].pop(unique_id, None)
+
+        await self.api.stop()
+        if self.communicator and self.available:
+            await self.communicator.close()
+
+    @callback
+    async def shutdown(self, event: Event) -> None:
+        """Handle shutdown event asynchronously."""  
         await self.api.stop()
         if self.communicator and self.available:
             await self.communicator.close()
@@ -459,14 +415,14 @@ class BestinHub:
 
             self.hass.config_entries.async_update_entry(
                 entry=self.entry,
-                title=self.hubId,
+                title=self.hub_id,
                 data={**self.entry.data, "gateway_mode": self.gateway_mode},
             )
             self.api = BestinController(
                 self.hass,
                 self.entry,
                 self.entities,
-                self.hubId,
+                self.hub_id,
                 self.communicator,
                 self.async_add_device_callback,
             )
@@ -474,8 +430,8 @@ class BestinHub:
             await self.api.start()
         except Exception as ex:
             self.api = None
-            LOGGER.error(
-                f"Failed to initialize Bestin gateway. Host: {self.hubId}, Gateway Mode: {self.gateway_mode}. "
+            raise RuntimeError(
+                f"Failed to initialize Bestin gateway. Host: {self.hub_id}, Gateway Mode: {self.gateway_mode}. "
                 f"Error: {str(ex)}. Traceback: {traceback.format_exc()}"
             )
 
@@ -488,27 +444,29 @@ class BestinHub:
                 self.hass,
                 self.entry,
                 self.entities,
-                self.hubId,
+                self.hub_id,
                 self.version,
                 self.identifier,
                 self.async_add_device_callback,
             )
             await self.api.start()
 
-            if self.version == "version2.0" and self.ipAddress:
-                if re.match(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$", self.ipAddress):
-                    if not self.is_entity_registered(keyword="elevator"):
+            if self.version == "version2.0" and self.ip_address:
+                if re.match(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$", self.ip_address):
+                    if not os.path.exists('data.json'):
                         await self.api.elevator_call_request()
                     else:
-                        self.api.handle_message_info(message="{}")
+                        async with aiofiles.open('data.json', 'r') as file:
+                            content = await file.read()
+                            await self.api.handle_message_info(content)  # elevator
                 else:
                     LOGGER.warning(
-                        f"Wallpad IP address exists, but it doesn't fit the format pattern. {self.ipAddress} "
+                        f"Wallpad IP address exists, but it doesn't fit the format pattern. {self.ip_address} "
                         f"Please report it to the developer."
                     )
         except Exception as ex:
             self.api = None
-            LOGGER.error(
-                f"Failed to initialize Bestin API. Host: {self.hubId}, Version: {self.version}. "
+            raise RuntimeError(
+                f"Failed to initialize Bestin API. Host: {self.hub_id}, Version: {self.version}. "
                 f"Error: {str(ex)}. Traceback: {traceback.format_exc()}"
             )

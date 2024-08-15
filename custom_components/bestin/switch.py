@@ -25,12 +25,12 @@ async def async_setup_entry(
     @callback
     def async_add_switch(devices=None):
         if devices is None:
-            devices = hub.api.switchs
+            devices = hub.api.get_devices_from_domain(DOMAIN)
 
         entities = [
             BestinSwitch(device, hub) 
             for device in devices 
-            if device.unique_id not in hub.entities[DOMAIN]
+            if device.info.id not in hub.entities[DOMAIN]
         ]
 
         if entities:
@@ -51,13 +51,13 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._is_gas = device.type == "gas"
+        self._is_gas = device.info.type == "gas"
         self._version_exists = getattr(hub.api, "version", False)
 
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        return self._device.state
+        return self._device.info.state
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""

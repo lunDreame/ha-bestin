@@ -40,12 +40,12 @@ async def async_setup_entry(
     @callback
     def async_add_sensor(devices=None):
         if devices is None:
-            devices = hub.api.sensors
-            
+            devices = hub.api.get_devices_from_domain(DOMAIN)
+
         entities = [
             BestinSensor(device, hub) 
             for device in devices 
-            if device.unique_id not in hub.entities[DOMAIN]
+            if device.info.id not in hub.entities[DOMAIN]
         ]
 
         if entities:
@@ -79,7 +79,7 @@ class BestinSensor(BestinDevice):
 
         if isinstance(factor, list) and len(factor) == 2:
             factor = factor[0] if self._is_general else factor[1]
-        return factor(self._device.state)
+        return factor(self._device.info.state)
     
     @property
     def device_class(self):

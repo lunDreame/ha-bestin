@@ -1,5 +1,7 @@
 import logging
-from typing import Any
+
+from typing import Any, Callable
+from dataclasses import dataclass
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import (
@@ -12,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -39,51 +41,64 @@ NEW_SWITCH = "switchs"
 MAIN_DEVICES: list[str] = [
     "fan",
     "ventil",
+    "elevator:direction",
+    "elevator:floor",
     "gas",
     "doorlock",
     "elevator",
-    "elevator:floor",
-    "elevator:direction",
 ]
 
 DEVICE_TYPE_MAP: dict[str] = {
-    "light": NEW_LIGHT,
-    "outlet": NEW_SWITCH,
-    "outlet:consumption": NEW_SENSOR,
-    "outlet:cutoff": NEW_SWITCH,
     "thermostat": NEW_CLIMATE,
-    "energy": NEW_SENSOR,
     "fan": NEW_FAN,
+    "light": NEW_LIGHT,
+    "outlet:consumption": NEW_SENSOR,
+    "energy": NEW_SENSOR,
+    "outlet": NEW_SWITCH,
+    "outlet:cutoff": NEW_SWITCH,
     "gas": NEW_SWITCH,
     "doorlock": NEW_SWITCH,
-    # Center
-    "electric": NEW_SWITCH,
-    "electric:cutoff": NEW_SWITCH,
-    "temper": NEW_CLIMATE,
-    "ventil": NEW_FAN,
-    "elevator": NEW_SWITCH,
-    "elevator:floor": NEW_SENSOR,
-    "elevator:direction": NEW_SENSOR,
 }
 
 DEVICE_PLATFORM_MAP: dict[str, Platform] = {
-    "light": Platform.LIGHT,
-    "outlet": Platform.SWITCH,
-    "outlet:consumption": Platform.SENSOR,
-    "outlet:cutoff": Platform.SWITCH,
     "thermostat": Platform.CLIMATE,
-    "energy": Platform.SENSOR,
     "fan": Platform.FAN,
+    "light": Platform.LIGHT,
+    "outlet:consumption": Platform.SENSOR,
+    "energy": Platform.SENSOR,
+    "outlet": Platform.SWITCH,
+    "outlet:cutoff": Platform.SWITCH,
     "gas": Platform.SWITCH,
     "doorlock": Platform.SWITCH,
-    # Center
+}
+
+# Center
+DEVICE_CTR_TYPE_MAP: dict[str] = {
+    "temper": NEW_CLIMATE,
+    "thermostat": NEW_CLIMATE,
+    "ventil": NEW_FAN,
+    "light": NEW_LIGHT,
+    "livinglight": NEW_LIGHT,
+    "elevator:direction": NEW_SENSOR,
+    "elevator:floor": NEW_SENSOR,
+    "electric": NEW_SWITCH,
+    "electric:cutoff": NEW_SWITCH,
+    "gas": NEW_SWITCH,
+    "elevator": NEW_SWITCH,
+}
+
+DEVICE_CTR_PLATFORM_MAP: dict[str, Platform] = {
+    "temper": Platform.CLIMATE,
+    "thermostat": Platform.CLIMATE,
+    "ventil": Platform.FAN,
+    "light": Platform.LIGHT,
+    "livinglight": Platform.LIGHT,
+    "elevator:direction": Platform.SENSOR,
+    "elevator:floor": Platform.SENSOR,
     "electric": Platform.SWITCH,
     "electric:cutoff": Platform.SWITCH,
-    "temper": Platform.CLIMATE,
-    "ventil": Platform.FAN,
+    "gas": Platform.SWITCH,
     "elevator": Platform.SWITCH,
-    "elevator:floor": Platform.SENSOR,
-    "elevator:direction": Platform.SENSOR,
 }
 
 # Fan (Ventil)
@@ -106,6 +121,7 @@ ELEMENT_BYTE_RANGE: dict[str, tuple[slice]] = {
     "hotwater": (slice(24, 28), slice(24, 28)),
     "water": (slice(17, 20), slice(17, 20)),
 }
+
 # Energy (HEMS) Class Map
 ELEMENT_DEVICE_CLASS: dict[str, UnitOfPower | SensorDeviceClass] = {
     "outlet:consumption": UnitOfPower.WATT,
@@ -114,6 +130,7 @@ ELEMENT_DEVICE_CLASS: dict[str, UnitOfPower | SensorDeviceClass] = {
     "gas:total": SensorDeviceClass.GAS,
     "water:total": SensorDeviceClass.WATER,
 }
+
 # Energy (HEMS) Unit Map
 ELEMENT_UNIT: dict[str, UnitOfPower | UnitOfEnergy | UnitOfVolumeFlowRate | UnitOfVolume] = {
     "outlet:consumption": UnitOfPower.WATT,
@@ -128,6 +145,7 @@ ELEMENT_UNIT: dict[str, UnitOfPower | UnitOfEnergy | UnitOfVolumeFlowRate | Unit
     "water:realtime": UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
     "water:total": UnitOfVolume.CUBIC_METERS,
 }
+
 # Energy (HEMS) Value Convert
 ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
     "outlet:consumption": lambda value: value,
@@ -153,3 +171,26 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
         lambda value: value / 1000,
     ],
 }
+
+@dataclass
+class DeviceInfo:
+    """Represents the basic information of a device."""
+    id: str
+    type: str
+    name: str
+    room: str
+    state: Any
+
+@dataclass
+class Device:
+    """Represents a device with callbacks and update functionalities."""
+    info: DeviceInfo
+    platform: Platform
+    on_command: Callable
+    callbacks: set[Callable]
+    
+    def add_callback(self, callback: Callable):
+        self.callbacks.add(callback)
+
+    def remove_callback(self, callback: Callable):
+        self.callbacks.discard(callback)

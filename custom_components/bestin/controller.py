@@ -1,12 +1,11 @@
 import re
 import asyncio
-from typing import Any, Callable, Optional
-from dataclasses import dataclass, field
+import traceback
+from typing import Any, Optional, Callable
 
 from homeassistant.components.climate import HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.const import Platform
 
 from .const import (
     DOMAIN,
@@ -21,22 +20,9 @@ from .const import (
     SPEED_INT_LOW,
     SPEED_INT_MEDIUM,
     SPEED_INT_HIGH,
+    Device,
+    DeviceInfo,
 )
-
-
-@dataclass
-class DeviceProfile:
-    """Create an initial device profile."""
-    unique_id: str
-    name: str
-    type: str
-    room: str
-    state: Any
-    platform: str
-    on_register: Callable
-    on_remove: Callable
-    on_command: Callable
-    on_update: Optional[Callable] = field(default=None)
 
 
 class AsyncQueue:
@@ -74,14 +60,14 @@ class BestinController:
         hass: HomeAssistant,
         entry: ConfigEntry,
         entities: dict,
-        hubid: str, 
+        hub_id: str, 
         communicator,
         async_add_device: Callable,
     ) -> None:
         self.hass = hass
         self.entry = entry
         self.entities = entities
-        self.hubid = hubid
+        self.hub_id = hub_id
         self.communicator = communicator
         self.async_add_device = async_add_device
         self.gateway_type: str = entry.data["gateway_mode"][0]
@@ -138,7 +124,7 @@ class BestinController:
             checksum = (checksum + 1) & 0xFF
         return checksum == packet[-1]
 
-    def convert_unique_id(self, unique_id: str) -> tuple[str, None | str]:
+    def convert_unique_id(self, unique_id: str) -> tuple[str, Optional[str]]:
         """Convert device_id, sub_id from unique_id."""
         parts = unique_id.split("-")[0].split("_")
         if len(parts) > 3:
@@ -151,44 +137,9 @@ class BestinController:
         return device_id, sub_id
 
     def get_devices_from_domain(self, domain: str) -> list[dict]:
-        """Get devices registered to an entity based on domain."""
-        entity_list = self.entities.get(domain, set())
-        return [self.initialize_device(*self.convert_unique_id(uid), None) for uid in entity_list]
-    
-    @property
-    def lights(self) -> list:
-        """Loads a device in the light domain from an entity."""
-        return self.get_devices_from_domain(Platform.LIGHT)
-
-    @property
-    def switchs(self) -> list:
-        """Loads a device in the switch domain from an entity."""
-        return self.get_devices_from_domain(Platform.SWITCH)
-    
-    @property
-    def sensors(self) -> list:
-        """Loads a device in the sensor domain from an entity."""
-        return self.get_devices_from_domain(Platform.SENSOR)
-
-    @property
-    def climates(self) -> list:
-        """Loads a device in the climate domain from an entity."""
-        return self.get_devices_from_domain(Platform.CLIMATE)
-    
-    @property
-    def fans(self) -> list:
-        """Loads a device in the fan domain from an entity."""
-        return self.get_devices_from_domain(Platform.FAN)
-    
-    def on_register(self, unique_id: str, update: Callable) -> None:
-        """Register a callback function for updates."""
-        self.devices[unique_id].on_update = update
-        LOGGER.debug(f"Callback registered for device with unique_id: {unique_id}")
-
-    def on_remove(self, unique_id: str) -> None:
-        """Remove a registered callback function."""
-        self.devices[unique_id].on_update = None
-        LOGGER.debug(f"Callback removed for device with unique_id: {unique_id}")
+        """Retrieve devices associated with a specific domain."""
+        entity_list = self.entities.get(domain, [])
+        return [self.devices.get(uid, {}) for uid in entity_list]
 
     def make_light_packet(
         self, timestamp: int, room_id: int, pos_id: int, sub_type: str, value: bool
@@ -304,7 +255,7 @@ class BestinController:
         return packet
     
     @callback
-    async def on_command(self, unique_id: str, value: Any, **kwargs: dict | None) -> None:
+    async def on_command(self, unique_id: str, value: Any, **kwargs: Optional[dict]):
         """Queue a command for the device identified by unique_id."""
         parts = unique_id.split("-")[0].split("_")    
         device_type = parts[1]
@@ -336,16 +287,16 @@ class BestinController:
         LOGGER.debug(f"Create queue task: {queue_task}")
         await self.queue.put(queue_task)
     
-    def initialize_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
+    def initialize_device(self, device_id: str, sub_id: Optional[str], state: Any) -> dict:
         """Initialize devices using a unique_id derived from device_id and sub_id."""
         device_type, device_room = device_id.split("_")
         
         base_unique_id = f"bestin_{device_id}"
         unique_id = f"{base_unique_id}_{sub_id}" if sub_id else base_unique_id
-        full_unique_id = f"{unique_id}-{self.hubid}"
+        full_unique_id = f"{unique_id}-{self.hub_id}"
         
-        if device_type != "energy" and (sub_id and not sub_id.isdigit()):
-            letter_sub_id = "".join(re.findall(r'[a-zA-Z]', sub_id))
+        if device_type != "energy" and sub_id and not sub_id.isdigit():
+            letter_sub_id = ''.join(filter(str.isalpha, sub_id))
             device_type = f"{device_type}:{letter_sub_id}"
         
         platform = DEVICE_PLATFORM_MAP.get(device_type)
@@ -353,26 +304,25 @@ class BestinController:
             raise ValueError(f"Unsupported platform type for device: {device_type}")
 
         if full_unique_id not in self.devices:
-            device = DeviceProfile(
-                unique_id=full_unique_id,
-                name=unique_id,
+            device_info = DeviceInfo(
+                id=full_unique_id,
                 type=device_type,
+                name=unique_id,
                 room=device_room,
                 state=state,
+            )
+            device = Device(
+                info=device_info,
                 platform=platform,
-                on_register=self.on_register,
-                on_remove=self.on_remove,
                 on_command=self.on_command,
+                callbacks=set()
             )
             self.devices[full_unique_id] = device
 
         return self.devices[full_unique_id]
     
-    def setup_device(self, device_id: str, state: Any, is_sub: bool = False) -> None:
-        """Set up device with specified state."""
-        if not device_id:
-            raise ValueError("Device ID cannot be empty")
-        
+    def setup_device(self, device_id: str, state: Any, is_sub=False) -> None:
+        """Set up device with specified state."""        
         device_type = device_id.split("_")[0]
         if device_type not in DEVICE_TYPE_MAP:
             raise ValueError(f"Unsupported device type: {device_type}")
@@ -380,20 +330,20 @@ class BestinController:
         final_states = state.items() if is_sub else [(None, state)]
         for sub_id, sub_state in final_states:
             device = self.initialize_device(device_id, sub_id, sub_state)
-            #unique_id = device.unique_id
 
-            if device_type != "energy" and (sub_id and not sub_id.isdigit()):
-                letter_sub_id = "".join(re.findall(r'[a-zA-Z]', sub_id))
+            if device_type != "energy" and sub_id and not sub_id.isdigit():
+                letter_sub_id = ''.join(filter(str.isalpha, sub_id))
                 device_key = f"{device_type}:{letter_sub_id}"
-                new_device_type = DEVICE_TYPE_MAP[device_key]
+                _device_type = DEVICE_TYPE_MAP[device_key]
             else:
-                new_device_type = DEVICE_TYPE_MAP[device_type]
-            self.async_add_device(new_device_type, device)
+                _device_type = DEVICE_TYPE_MAP[device_type]
+            self.async_add_device(_device_type, device)
 
-            if device.state != sub_state:
-                device.state = sub_state
-                if device.on_update and callable(device.on_update):
-                    device.on_update()
+            if device.info.state != sub_state:
+                device.info.state = sub_state
+                for callback in device.callbacks:
+                    assert callable(callback), "Callback should be callable"
+                    callback()
 
     def make_common_packet(
         self,
@@ -447,7 +397,7 @@ class BestinController:
         preset_mode	= PRESET_NATURAL_VENTILATION if is_natural_ventilation else PRESET_NONE
 
         fan_state = {
-            "state": bool(packet[5] & 0x01),
+            "is_on": bool(packet[5] & 0x01),
             "speed": packet[6],
             "speed_list": [SPEED_INT_LOW, SPEED_INT_MEDIUM, SPEED_INT_HIGH],
             "preset_modes": [PRESET_NATURAL_VENTILATION, PRESET_NONE],
@@ -572,13 +522,14 @@ class BestinController:
         header = packet[1]
         packet_len = len(packet)
         room_id = device_state = device_id = None
+        self.timestamp = 0x00
 
         if packet_len == 10:
             command = packet[2]
-            self.timestamp = packet[3]
+            #self.timestamp = packet[3]
         else:
             command = packet[3]
-            self.timestamp = packet[4]
+            #self.timestamp = packet[4]
 
         if packet_len != 10 and command in [0x81, 0x82, 0x91, 0x92, 0xB2]:
             if header == 0x28:
