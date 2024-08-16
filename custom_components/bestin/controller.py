@@ -305,15 +305,17 @@ class BestinController:
 
         if full_unique_id not in self.devices:
             device_info = DeviceInfo(
-                id=full_unique_id,
-                type=device_type,
+                unique_id=full_unique_id,
+                device_type=device_type,
                 name=unique_id,
                 room=device_room,
                 state=state,
+                sub_type=sub_id or "",
+                colon_id=device_type if ":" in device_type else ""
             )
             device = Device(
                 info=device_info,
-                platform=platform,
+                domain=platform,
                 on_command=self.on_command,
                 callbacks=set()
             )

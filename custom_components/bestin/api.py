@@ -43,18 +43,25 @@ from .const import (
 class BestinAPIv2:
     """Bestin HDC Smarthome API v2 Class."""
 
-    def __init__(self) -> None:        
+    def __init__(self, hass, entry) -> None:        
         """API initialization."""
+        self.elevator_count = entry.data.get("elevator_count", 1)
         self.elevator_arrived = False
 
         self.features_list: list = []
-        self.elev_moveinfo: dict = {}
+        self.elevator_data: dict = {}
+
+    def setup_elevators(self):
+        for count in range(1, self.elevator_count + 1):
+            self.setup_device("elevator", 1, str(count), False)
+            self.setup_device("elevator", 1, f"floor_{str(count)}", "대기 층")
+            self.setup_device("elevator", 1, f"direction_{str(count)}", "대기")
 
     async def _v2_device_status(self, args=None):
         if args is not None:
             LOGGER.debug(f"Task execution started with argument: {args}")
             self.last_update_time = args
-
+        
         if self.features_list:
             await self.process_features(self.features_list)
         else:
@@ -107,6 +114,8 @@ class BestinAPIv2:
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.info(f"Just a central server elevator request successful")
+                    for count in range(1, self.elevator_count + 1):
+                        self.setup_device("elevator", 1, str(count), False)
                     self.hass.create_task(self.fetch_elevator_status())
                 else:
                     LOGGER.error(f"Only central server elevator request failed: {response_data}")
@@ -139,28 +148,26 @@ class BestinAPIv2:
         data = json.loads(message)
         
         if "move_info" in data:
-            if not os.path.exists('data.json'):
-                async with aiofiles.open('data.json', 'w') as file:
-                    await file.write(json.dumps(data["move_info"], indent=4))
-            
-            self.elev_moveinfo.update(data["move_info"])
-            #LOGGER.debug(f"Elevator move updated: {self.elev_moveinfo}")
-            
-            serial = str(self.elev_moveinfo.get("Serial", "1"))
-            floor = f"{str(self.elev_moveinfo.get('Floor', '대기'))} 층"
-            movedir = self.elev_moveinfo.get("MoveDir", "대기")
+            serial = data["move_info"]["Serial"]
+            move_info = data["move_info"]
 
-            self.setup_device("elevator", 1, f"floor_{serial}", floor)
-            self.setup_device("elevator", 1, f"direction_{serial}", movedir)
+            self.elevator_data = {serial: move_info}
+            self.elevator_data = dict(sorted(self.elevator_data.items()))
+            LOGGER.debug(f"Elevator data: {self.elevator_data}")
+            if len(self.elevator_data) >= 2:
+                for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
+                    floor = info["move_info"]["Floor"]
+                    move_dir = info["move_info"]["MoveDir"]
+            
+                    self.setup_device("elevator", 1, f"floor_{str(idx)}", floor)
+                    self.setup_device("elevator", 1, f"direction_{str(idx)}", move_dir)
+            else:
+                self.setup_device("elevator", 1, f"floor_1", move_info["Floor"])
+                self.setup_device("elevator", 1, f"direction_1", move_info["MoveDir"])
         else:
-            self.elev_moveinfo = data
-            
-            serial = str(self.elev_moveinfo.get("Serial", "1"))
-            floor = f"{str(self.elev_moveinfo.get('Floor', '도착'))} 층"
-
-            self.setup_device("elevator", 1, serial, False)
-            self.setup_device("elevator", 1, f"floor_{serial}", floor)
-            self.setup_device("elevator", 1, f"direction_{serial}", "도착")
+            for count in range(1, self.elevator_count + 1):
+                self.setup_device("elevator", 1, f"floor_{str(count)}", "도착 층")
+                self.setup_device("elevator", 1, f"direction_{str(count)}", "도착")
             self.elevator_arrived = True
 
     async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str) -> None:
@@ -273,16 +280,18 @@ class BestinAPI(BestinAPIv2):
         hub_id: str,
         version: str,
         version_identifier: str,
+        elevator_registration: bool,
         async_add_device: Callable
     ) -> None:
         """API initialization."""
-        super().__init__()
+        super().__init__(hass, entry)
         self.hass = hass
         self.entry = entry
         self.entities = entities
         self.hub_id = hub_id
         self.version = version
         self.version_identifier = version_identifier
+        self.elevator_registration = elevator_registration
         self.async_add_device = async_add_device
 
         ssl_context = ssl.create_default_context()
@@ -302,7 +311,7 @@ class BestinAPI(BestinAPIv2):
     def get_short_hash(self, id: str) -> str:
         """Generate a short hash for a given id."""
         hash_object = hashlib.sha256(id.encode()).digest()
-        return base64.urlsafe_b64encode(hash_object)[:8].decode("utf-8")
+        return base64.urlsafe_b64encode(hash_object)[:8].decode("utf-8").upper()
 
     async def start(self) -> None:
         """Start main loop with asyncio."""
@@ -310,6 +319,9 @@ class BestinAPI(BestinAPIv2):
         self.tasks.append(asyncio.create_task(self.schedule_session_refresh()))
         await asyncio.sleep(1)
 
+        if self.elevator_registration:
+            LOGGER.debug("Setting up elevator")
+            self.setup_elevators()
         v_key = getattr(self, f"_v{self.version[7:8]}_device_status")
         scan_interval = self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         interval = timedelta(minutes=scan_interval)
@@ -445,15 +457,17 @@ class BestinAPI(BestinAPIv2):
 
         if full_unique_id not in self.devices:
             device_info = DeviceInfo(
-                id=full_unique_id,
-                type=device_type,
+                unique_id=full_unique_id,
+                device_type=device_type,
                 name=unique_id,
                 room=device_room,
                 state=state,
+                sub_type=unit_id or "",
+                colon_id=device_type if ":" in device_type else ""
             )
             device = Device(
                 info=device_info,
-                platform=platform,
+                domain=platform,
                 on_command=self.on_command,
                 callbacks=set()
             )

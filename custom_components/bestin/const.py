@@ -1,7 +1,7 @@
 import logging
 
-from typing import Any, Callable
-from dataclasses import dataclass
+from typing import Callable, Any, Optional, Set
+from dataclasses import dataclass, field
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import (
@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -27,6 +27,7 @@ PLATFORMS: list[Platform] = [
 LOGGER: logging.Logger = logging.getLogger(__package__)
 
 DEFAULT_PORT: int = 8899
+DEFAULT_ELEVATOR_COUNT: int = 1
 DEFAULT_SCAN_INTERVAL: int = 15
 DEFAULT_MAX_TRANSMISSION: int = 10
 
@@ -175,22 +176,26 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 @dataclass
 class DeviceInfo:
     """Represents the basic information of a device."""
-    id: str
-    type: str
+    unique_id: str
+    device_type: str
     name: str
     room: str
     state: Any
+    colon_id: Optional[str] = None
+    sub_type: Optional[str] = None
 
 @dataclass
 class Device:
     """Represents a device with callbacks and update functionalities."""
     info: DeviceInfo
-    platform: Platform
+    domain: str
     on_command: Callable
-    callbacks: set[Callable]
+    callbacks: Set[Callable] = field(default_factory=set)
     
     def add_callback(self, callback: Callable):
+        """Add a callback to the set of callbacks."""
         self.callbacks.add(callback)
 
     def remove_callback(self, callback: Callable):
+        """Remove a callback from the set of callbacks, if it exists."""
         self.callbacks.discard(callback)

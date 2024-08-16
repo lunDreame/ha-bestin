@@ -4,18 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.entity import Entity, DeviceInfo
 from homeassistant.core import callback
 
 from .const import DOMAIN, MAIN_DEVICES
-
-
-def split_dt(dt: str) -> str:
-    """
-    Split the first part by a colon,
-    if there is no colon, return the entire string.
-    """
-    return dt.split(":")[0].title() if ":" in dt else dt.title()
 
 
 class BestinBase:
@@ -29,32 +21,44 @@ class BestinBase:
     @property
     def unique_id(self) -> str:
         """Return a unique ID."""
-        return self._device.info.id
+        return self._device.info.unique_id
 
     @property
-    def device_info(self):
-        """Return device registry information for this entity."""
-        base_info = {
-            "connections": {(self.hub.hub_id, self.unique_id)},
-            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{split_dt(self._device.info.type)}")},
-            "manufacturer": "HDC Labs Co., Ltd.",
-            "model": self.hub.wp_version,
-            "name": f"{self.hub.name} {split_dt(self._device.info.type)}",
-            "sw_version": self.hub.sw_version,
-            "via_device": (DOMAIN, self.hub.hub_id),
-        }
-        if self._device.info.type in MAIN_DEVICES:
-            base_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")}
-            base_info["name"] = f"{self.hub.name}"
+    def device_type_name(self) -> str:
+        """Returns the formatted device type name."""
+        device_type = self._device.info.device_type
+        return (device_type.split(":")[0].title() 
+                if ":" in device_type else device_type.title())
 
-        return base_info
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device registry information for this entity."""
+        if self._device.info.device_type in MAIN_DEVICES:
+            return DeviceInfo(
+                connections={(self.hub.hub_id, self.unique_id)},
+                identifiers={(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")},
+                manufacturer="HDC Labs Co., Ltd.",
+                model=self.hub.wp_version,
+                name=self.hub.name,
+                sw_version=self.hub.sw_version,
+                via_device=(DOMAIN, self.hub.hub_id),
+            )
+        return DeviceInfo(
+            connections={(self.hub.hub_id, self.unique_id)},
+            identifiers={(DOMAIN, f"{self.hub.wp_version}_{self.device_type_name}")},
+            manufacturer="HDC Labs Co., Ltd.",
+            model=self.hub.wp_version,
+            name=f"{self.hub.name} {self.device_type_name}",
+            sw_version=self.hub.sw_version,
+            via_device=(DOMAIN, self.hub.hub_id),
+        )
 
     async def _on_command(self, data: Any = None, **kwargs):
         """Send commands to the device."""
         await self._device.on_command(self.unique_id, data, **kwargs)
 
 
-class BestinDevice(BestinBase, RestoreEntity):
+class BestinDevice(BestinBase, Entity):
     """Define the Bestin Device entity."""
 
     TYPE = ""
@@ -109,7 +113,7 @@ class BestinDevice(BestinBase, RestoreEntity):
         attributes = {
             "unique_id": self.unique_id,
             "device_room": self._device.info.room,
-            "device_type": self._device.info.type,
+            "device_type": self._device.info.device_type,
         }
         if self.should_poll:
             attributes["last_update_time"] = self.hub.api.last_update_time

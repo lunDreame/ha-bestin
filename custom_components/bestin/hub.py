@@ -284,7 +284,7 @@ class BestinHub:
         if check_ip_or_serial(self.hub_id):
             return f"{self.gateway_mode[0]}-generation"
         else:
-            return f"Center-{self.version}"
+            return f"Center-v{self.version[7:8]}"
 
     @property
     def conn_str(self) -> str:
@@ -350,8 +350,8 @@ class BestinHub:
         self, device_type: str, device=None, force: bool = False
     ) -> None:
         """Add device callback if not already registered."""
-        domain = device.platform.value
-        unique_id = device.info.id
+        domain = device.domain.value
+        unique_id = device.info.unique_id
         
         if (unique_id in self.entities.get(domain, [])
             or unique_id in self.hass.data[DOMAIN]):   
@@ -410,8 +410,7 @@ class BestinHub:
         Asynchronously initialize the Bestin Controller for serial communication.
         """
         try:
-            if self.gateway_mode is None:
-                await self.determine_gateway_mode()
+            await self.determine_gateway_mode()
 
             self.hass.config_entries.async_update_entry(
                 entry=self.entry,
@@ -447,23 +446,11 @@ class BestinHub:
                 self.hub_id,
                 self.version,
                 self.identifier,
+                self.version == "version2.0" and self.ip_address,
                 self.async_add_device_callback,
             )
             await self.api.start()
 
-            if self.version == "version2.0" and self.ip_address:
-                if re.match(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$", self.ip_address):
-                    if not os.path.exists('data.json'):
-                        await self.api.elevator_call_request()
-                    else:
-                        async with aiofiles.open('data.json', 'r') as file:
-                            content = await file.read()
-                            await self.api.handle_message_info(content)  # elevator
-                else:
-                    LOGGER.warning(
-                        f"Wallpad IP address exists, but it doesn't fit the format pattern. {self.ip_address} "
-                        f"Please report it to the developer."
-                    )
         except Exception as ex:
             self.api = None
             raise RuntimeError(

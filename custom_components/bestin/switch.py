@@ -30,7 +30,7 @@ async def async_setup_entry(
         entities = [
             BestinSwitch(device, hub) 
             for device in devices 
-            if device.info.id not in hub.entities[DOMAIN]
+            if device.info.unique_id not in hub.entities[DOMAIN]
         ]
 
         if entities:
@@ -51,7 +51,7 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._is_gas = device.info.type == "gas"
+        self._is_gas = device.info.device_type == "gas"
         self._version_exists = getattr(hub.api, "version", False)
 
     @property

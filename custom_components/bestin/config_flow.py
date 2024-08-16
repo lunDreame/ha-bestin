@@ -31,6 +31,7 @@ from .const import (
     DOMAIN,
     LOGGER,
     DEFAULT_PORT,
+    DEFAULT_ELEVATOR_COUNT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_MAX_TRANSMISSION,
     DEFAULT_PACKET_VIEWER,
@@ -237,6 +238,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
 
         data_schema = vol.Schema({
             vol.Optional(CONF_IP_ADDRESS): cv.string,
+            vol.Required("elevator_count", default=DEFAULT_ELEVATOR_COUNT): ConfigFlow.int_between(1, 3),
             vol.Required(CONF_UUID): cv.string,
         })
 

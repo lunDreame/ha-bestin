@@ -45,7 +45,7 @@ async def async_setup_entry(
         entities = [
             BestinSensor(device, hub) 
             for device in devices 
-            if device.info.id not in hub.entities[DOMAIN]
+            if device.info.unique_id not in hub.entities[DOMAIN]
         ]
 
         if entities:
