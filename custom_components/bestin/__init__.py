@@ -19,8 +19,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if "version" not in entry.data:
         if not await hub.connect():
-            LOGGER.debug(f"Hub connection failed: {hub.hub_id}")
-            await hub.shutdown()
+            LOGGER.warning(f"Hub connection failed: {hub.hub_id}")
+            await hub.async_close()
+            
             hass.data[DOMAIN].pop(entry.entry_id)
             return False
 
@@ -29,7 +30,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         await hub.async_initialize_center()
     
-    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.shutdown))
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, hub.shutdown)
+    )
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

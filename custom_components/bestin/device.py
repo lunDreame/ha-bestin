@@ -8,6 +8,7 @@ from homeassistant.helpers.entity import Entity, DeviceInfo
 from homeassistant.core import callback
 
 from .const import DOMAIN, MAIN_DEVICES
+from .until import formatted_name
 
 
 class BestinBase:
@@ -17,6 +18,13 @@ class BestinBase:
         """Set up device and update callbacks."""
         self._device = device
         self.hub = hub
+        
+        self.device_name = device.info.name
+        self.device_type = device.info.device_type
+    
+    async def enqueue_command(self, data: Any = None, **kwargs):
+        """Send commands to the device."""
+        await self._device.enqueue_command(self.device_name, data, **kwargs)
 
     @property
     def unique_id(self) -> str:
@@ -24,38 +32,23 @@ class BestinBase:
         return self._device.info.unique_id
 
     @property
-    def device_type_name(self) -> str:
-        """Returns the formatted device type name."""
-        device_type = self._device.info.device_type
-        return (device_type.split(":")[0].title() 
-                if ":" in device_type else device_type.title())
-
-    @property
     def device_info(self) -> DeviceInfo:
         """Return device registry information for this entity."""
-        if self._device.info.device_type in MAIN_DEVICES:
-            return DeviceInfo(
-                connections={(self.hub.hub_id, self.unique_id)},
-                identifiers={(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")},
-                manufacturer="HDC Labs Co., Ltd.",
-                model=self.hub.wp_version,
-                name=self.hub.name,
-                sw_version=self.hub.sw_version,
-                via_device=(DOMAIN, self.hub.hub_id),
-            )
-        return DeviceInfo(
-            connections={(self.hub.hub_id, self.unique_id)},
-            identifiers={(DOMAIN, f"{self.hub.wp_version}_{self.device_type_name}")},
-            manufacturer="HDC Labs Co., Ltd.",
-            model=self.hub.wp_version,
-            name=f"{self.hub.name} {self.device_type_name}",
-            sw_version=self.hub.sw_version,
-            via_device=(DOMAIN, self.hub.hub_id),
-        )
-
-    async def _on_command(self, data: Any = None, **kwargs):
-        """Send commands to the device."""
-        await self._device.on_command(self.unique_id, data, **kwargs)
+        device_info = {
+            "connections": {(self.hub.hub_id, self.unique_id)},
+            "identifiers": {(DOMAIN, f"{self.hub.wp_version}_{self.hub.model}")},
+            "manufacturer": "HDC Labs Co., Ltd.",
+            "model": self.hub.wp_version,
+            "name": self.hub.name,
+            "sw_version": self.hub.sw_version,
+            "via_device": (DOMAIN, self.hub.hub_id),
+        }
+        if self.device_type not in MAIN_DEVICES:
+            formatted_device_type = formatted_name(self.device_type)
+            device_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{formatted_device_type}")}
+            device_info["name"] = f"{self.hub.name} {formatted_device_type}"
+        
+        return DeviceInfo(**device_info)
 
 
 class BestinDevice(BestinBase, Entity):
@@ -76,11 +69,14 @@ class BestinDevice(BestinBase, Entity):
     async def async_added_to_hass(self):
         """Subscribe to device events."""
         self._device.add_callback(self.async_update_callback)
+        self.hub.entity_ids[self.entity_id] = self.device_name
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
         self._device.remove_callback(self.async_update_callback)
+        del self.hub.entity_ids[self.entity_id]
+        self.hub.entities[self.TYPE].remove(self.unique_id)
 
     @callback
     def async_restore_last_state(self, last_state) -> None:
@@ -100,7 +96,7 @@ class BestinDevice(BestinBase, Entity):
     @property
     def name(self) -> str:
         """Return the name of the device."""
-        return self._device.info.name
+        return self.device_name
 
     @property
     def should_poll(self) -> bool:
@@ -112,9 +108,10 @@ class BestinDevice(BestinBase, Entity):
         """Return the state attributes of the sensor."""
         attributes = {
             "unique_id": self.unique_id,
+            "device_type": self.device_type,
             "device_room": self._device.info.room,
-            "device_type": self._device.info.device_type,
         }
         if self.should_poll:
             attributes["last_update_time"] = self.hub.api.last_update_time
+        
         return attributes

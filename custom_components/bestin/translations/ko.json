@@ -34,7 +34,6 @@
             "center_v2": {
                 "data": {
                     "ip_address": "IP 주소",
-                    "elevator_count": "엘리베이터 수",
                     "uuid": "UUID"
                 },
                 "data_description": {

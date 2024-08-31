@@ -1,6 +1,6 @@
 import logging
 
-from typing import Callable, Any, Optional, Set
+from typing import Callable, Any, Set
 from dataclasses import dataclass, field
 
 from homeassistant.components.sensor import SensorDeviceClass
@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.1.1"
+VERSION = "1.3.0"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -27,7 +27,6 @@ PLATFORMS: list[Platform] = [
 LOGGER: logging.Logger = logging.getLogger(__package__)
 
 DEFAULT_PORT: int = 8899
-DEFAULT_ELEVATOR_COUNT: int = 1
 DEFAULT_SCAN_INTERVAL: int = 15
 DEFAULT_MAX_TRANSMISSION: int = 10
 
@@ -49,19 +48,15 @@ MAIN_DEVICES: list[str] = [
     "elevator",
 ]
 
-DEVICE_TYPE_MAP: dict[str] = {
-    "thermostat": NEW_CLIMATE,
-    "fan": NEW_FAN,
-    "light": NEW_LIGHT,
-    "outlet:consumption": NEW_SENSOR,
-    "energy": NEW_SENSOR,
-    "outlet": NEW_SWITCH,
-    "outlet:cutoff": NEW_SWITCH,
-    "gas": NEW_SWITCH,
-    "doorlock": NEW_SWITCH,
+DOMAIN_SIGNAL_MAP: dict[str, Platform] = {
+    Platform.CLIMATE: NEW_CLIMATE,
+    Platform.FAN: NEW_FAN,
+    Platform.LIGHT: NEW_LIGHT,
+    Platform.SENSOR: NEW_SENSOR,
+    Platform.SWITCH: NEW_SWITCH,
 }
 
-DEVICE_PLATFORM_MAP: dict[str, Platform] = {
+DEVICE_DOMAIN_MAP: dict[str, Platform] = {
     "thermostat": Platform.CLIMATE,
     "fan": Platform.FAN,
     "light": Platform.LIGHT,
@@ -74,21 +69,15 @@ DEVICE_PLATFORM_MAP: dict[str, Platform] = {
 }
 
 # Center
-DEVICE_CTR_TYPE_MAP: dict[str] = {
-    "temper": NEW_CLIMATE,
-    "thermostat": NEW_CLIMATE,
-    "ventil": NEW_FAN,
-    "light": NEW_LIGHT,
-    "livinglight": NEW_LIGHT,
-    "elevator:direction": NEW_SENSOR,
-    "elevator:floor": NEW_SENSOR,
-    "electric": NEW_SWITCH,
-    "electric:cutoff": NEW_SWITCH,
-    "gas": NEW_SWITCH,
-    "elevator": NEW_SWITCH,
+CTR_DOMAIN_SIGNAL_MAP: dict[Platform, str] = {
+    Platform.CLIMATE: NEW_CLIMATE,
+    Platform.FAN: NEW_FAN,
+    Platform.LIGHT: NEW_LIGHT,
+    Platform.SENSOR: NEW_SENSOR,
+    Platform.SWITCH: NEW_SWITCH,
 }
 
-DEVICE_CTR_PLATFORM_MAP: dict[str, Platform] = {
+CTR_DEVICE_DOMAIN_MAP: dict[str, Platform] = {
     "temper": Platform.CLIMATE,
     "thermostat": Platform.CLIMATE,
     "ventil": Platform.FAN,
@@ -176,20 +165,18 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 @dataclass
 class DeviceInfo:
     """Represents the basic information of a device."""
-    unique_id: str
     device_type: str
     name: str
     room: str
     state: Any
-    colon_id: Optional[str] = None
-    sub_type: Optional[str] = None
+    unique_id: str
 
 @dataclass
 class Device:
     """Represents a device with callbacks and update functionalities."""
     info: DeviceInfo
     domain: str
-    on_command: Callable
+    enqueue_command: Callable
     callbacks: Set[Callable] = field(default_factory=set)
     
     def add_callback(self, callback: Callable):

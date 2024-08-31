@@ -34,7 +34,6 @@
             "center_v2": {
                 "data": {
                     "ip_address": "IP address",
-                    "elevator_count": "Elevator count",
                     "uuid": "UUID"
                 },
                 "data_description": {

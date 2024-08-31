@@ -8,8 +8,6 @@ import xml.etree.ElementTree as ET
 import ssl
 import aiohttp
 import json
-#import requests
-#import sseclient
 
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
@@ -33,30 +31,31 @@ from .const import (
     SPEED_STR_LOW,
     SPEED_STR_MEDIUM,
     SPEED_STR_HIGH,
-    DEVICE_CTR_TYPE_MAP,
-    DEVICE_CTR_PLATFORM_MAP,
+    CTR_DOMAIN_SIGNAL_MAP,
+    CTR_DEVICE_DOMAIN_MAP,
     Device,
     DeviceInfo,
 )
 
 
-class BestinAPIv2:
+class CenterAPIv2:
     """Bestin HDC Smarthome API v2 Class."""
 
-    def __init__(self, hass, entry) -> None:        
+    def __init__(self, hass, entry) -> None:
         """API initialization."""
-        self.elevator_count = entry.data.get("elevator_count", 1)
         self.elevator_arrived = False
 
         self.features_list: list = []
         self.elevator_data: dict = {}
 
-    def setup_elevators(self):
-        for count in range(1, self.elevator_count + 1):
-            self.setup_device("elevator", 1, str(count), False)
-            self.setup_device("elevator", 1, f"floor_{str(count)}", "대기 층")
-            self.setup_device("elevator", 1, f"direction_{str(count)}", "대기")
-
+    async def process_elevator_request(self) -> None:
+        if not os.path.exists('data.json'):
+            await self.elevator_call_request()
+        else:
+            async with aiofiles.open('data.json', 'r') as file:
+                elevator_data = await file.read()
+                await self.handle_message_info(elevator_data, cache=True)
+    
     async def _v2_device_status(self, args=None):
         if args is not None:
             LOGGER.debug(f"Task execution started with argument: {args}")
@@ -114,8 +113,6 @@ class BestinAPIv2:
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.info(f"Just a central server elevator request successful")
-                    for count in range(1, self.elevator_count + 1):
-                        self.setup_device("elevator", 1, str(count), False)
                     self.hass.create_task(self.fetch_elevator_status())
                 else:
                     LOGGER.error(f"Only central server elevator request failed: {response_data}")
@@ -143,32 +140,38 @@ class BestinAPIv2:
         except Exception as ex:
             LOGGER.error(f"Fetch elevator status error occurred: {ex}")
 
-    async def handle_message_info(self, message) -> None:
+    async def handle_message_info(self, message, cache=False):
         """Handle message info for elevator status monitoring."""
         data = json.loads(message)
-        
+    
+        if not os.path.exists('data.json'):
+            async with aiofiles.open('data.json', 'w') as file:
+                await file.write(json.dumps(data["move_info"], indent=4))
+    
         if "move_info" in data:
-            serial = data["move_info"]["Serial"]
-            move_info = data["move_info"]
-
-            self.elevator_data = {serial: move_info}
-            self.elevator_data = dict(sorted(self.elevator_data.items()))
-            LOGGER.debug(f"Elevator data: {self.elevator_data}")
-            if len(self.elevator_data) >= 2:
-                for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
-                    floor = info["move_info"]["Floor"]
-                    move_dir = info["move_info"]["MoveDir"]
+            self.elevator_data.update(data["move_info"])
             
-                    self.setup_device("elevator", 1, f"floor_{str(idx)}", floor)
-                    self.setup_device("elevator", 1, f"direction_{str(idx)}", move_dir)
-            else:
-                self.setup_device("elevator", 1, f"floor_1", move_info["Floor"])
-                self.setup_device("elevator", 1, f"direction_1", move_info["MoveDir"])
+            serial = str(self.elevator_data["Serial"])
+            floor = self.elevator_data.get("Floor", "대기")
+            move_dir = self.elevator_data.get("MoveDir", "대기")
+
+            self.setup_device("elevator", 1, serial, False)
+            self.setup_device("elevator", 1, f"floor_{serial}", f"{floor} 층")
+            self.setup_device("elevator", 1, f"direction_{serial}", move_dir)
         else:
-            for count in range(1, self.elevator_count + 1):
-                self.setup_device("elevator", 1, f"floor_{str(count)}", "도착 층")
-                self.setup_device("elevator", 1, f"direction_{str(count)}", "도착")
-            self.elevator_arrived = True
+            if cache:
+                elevator_data = data.copy()
+                elevator_data.update({"Floor": "대기", "MoveDir": "대기"})
+                self.elevator_data = elevator_data
+            
+            serial = str(self.elevator_data["Serial"])
+            floor = self.elevator_data.get("Floor", "도착")
+
+            self.setup_device("elevator", 1, f"floor_{serial}", f"{floor} 층")
+            self.setup_device("elevator", 1, f"direction_{serial}", "도착")
+            
+            if not cache:
+                self.elevator_arrived = True
 
     async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str) -> None:
         """Request feature command."""
@@ -269,7 +272,7 @@ class BestinAPIv2:
             LOGGER.error(f"Error fetching feature list: {ex}")
 
 
-class BestinAPI(BestinAPIv2):
+class BestinCenterAPI(CenterAPIv2):
     """Bestin HDC Smarthome API Class."""
 
     def __init__(
@@ -281,7 +284,7 @@ class BestinAPI(BestinAPIv2):
         version: str,
         version_identifier: str,
         elevator_registration: bool,
-        async_add_device: Callable
+        add_device_callback: Callable
     ) -> None:
         """API initialization."""
         super().__init__(hass, entry)
@@ -292,7 +295,7 @@ class BestinAPI(BestinAPIv2):
         self.version = version
         self.version_identifier = version_identifier
         self.elevator_registration = elevator_registration
-        self.async_add_device = async_add_device
+        self.add_device_callback = add_device_callback
 
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
@@ -320,8 +323,9 @@ class BestinAPI(BestinAPIv2):
         await asyncio.sleep(1)
 
         if self.elevator_registration:
-            LOGGER.debug("Setting up elevator")
-            self.setup_elevators()
+            LOGGER.debug("Processing elevator request")
+            await self.process_elevator_request()
+        
         v_key = getattr(self, f"_v{self.version[7:8]}_device_status")
         scan_interval = self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         interval = timedelta(minutes=scan_interval)
@@ -389,9 +393,9 @@ class BestinAPI(BestinAPIv2):
             LOGGER.error(f"Exception during session refresh: {type(ex).__name__}: {ex}")
 
     @callback
-    async def on_command(self, unique_id: str, value: Any, **kwargs: Optional[dict]):
+    async def enqueue_command(self, device_id: str, value: Any, **kwargs: Optional[dict]):
         """Handle commands to the devices."""
-        parts = unique_id.split("-")[0].split("_")
+        parts = device_id.split("_")
         device_type = parts[1]
         room_id = int(parts[2])
         pos_id = 0
@@ -422,18 +426,6 @@ class BestinAPI(BestinAPIv2):
                 #LOGGER.debug(f"Created unit_id: {unit_id}")
                 await self.request_feature_command(device_type, room_id, unit_id, value)
 
-    def convert_unique_id(self, unique_id: str) -> tuple[str, Optional[str]]:
-        """Convert device_id, sub_id from unique_id."""
-        parts = unique_id.split("-")[0].split("_")
-        if len(parts) > 3:
-            unit_id = "_".join(parts[3:])
-            device_id = "_".join(parts[1:3])
-        else:
-            unit_id = None
-            device_id = "_".join(parts[1:3])
-
-        return device_id, unit_id
-
     def get_devices_from_domain(self, domain: str) -> list[dict]:
         """Retrieve devices associated with a specific domain."""
         entity_list = self.entities.get(domain, [])
@@ -451,24 +443,18 @@ class BestinAPI(BestinAPIv2):
             letter_unit_id = ''.join(filter(str.isalpha, unit_id))
             device_type = f"{device_type}:{letter_unit_id}"
         
-        platform = DEVICE_CTR_PLATFORM_MAP.get(device_type)
-        if not platform:
-            raise ValueError(f"Unsupported platform type for device: {device_type}")
-
         if full_unique_id not in self.devices:
             device_info = DeviceInfo(
-                unique_id=full_unique_id,
                 device_type=device_type,
                 name=unique_id,
                 room=device_room,
                 state=state,
-                sub_type=unit_id or "",
-                colon_id=device_type if ":" in device_type else ""
+                unique_id=full_unique_id
             )
             device = Device(
                 info=device_info,
-                domain=platform,
-                on_command=self.on_command,
+                domain=CTR_DEVICE_DOMAIN_MAP[device_type],
+                enqueue_command=self.enqueue_command,
                 callbacks=set()
             )
             self.devices[full_unique_id] = device
@@ -483,7 +469,7 @@ class BestinAPI(BestinAPIv2):
         #    f"Setting up {device_type} device number {device_number}, unit {unit_id}, status {status}"
         #)
 
-        if device_type not in DEVICE_CTR_TYPE_MAP:
+        if device_type not in CTR_DEVICE_DOMAIN_MAP:
             raise ValueError(f"Unsupported device type: {device_type}")
         
         device_id = f"{device_type}_{device_number}"
@@ -491,11 +477,13 @@ class BestinAPI(BestinAPIv2):
 
         if device_type != "energy" and unit_id and not unit_id.isdigit():
             letter_unit_id = ''.join(filter(str.isalpha, unit_id))
-            device_key = f"{device_type}:{letter_unit_id}"
-            _device_type = DEVICE_CTR_TYPE_MAP[device_key]
+            letter_device_type = f"{device_type}:{letter_unit_id}"
+            device_domain = CTR_DEVICE_DOMAIN_MAP[letter_device_type]
         else:
-            _device_type = DEVICE_CTR_TYPE_MAP[device_type]
-        self.async_add_device(_device_type, device)
+            device_domain = CTR_DEVICE_DOMAIN_MAP[device_type]
+        
+        domain_signal = CTR_DOMAIN_SIGNAL_MAP[device_domain]
+        self.add_device_callback(domain_signal, device)
 
         if device.info.state != status:
             device.info.state = status

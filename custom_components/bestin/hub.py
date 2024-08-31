@@ -1,22 +1,15 @@
-import os
 import re
-import json
 import time
 import asyncio
-import aiofiles
 import serial_asyncio
 import socket
 import traceback
 
-from typing import Optional, Callable, cast
+from typing import Optional, cast
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, CONF_PORT
 from homeassistant.core import HomeAssistant, Event, callback
-from homeassistant.helpers import (
-    device_registry as dr,
-    entity_registry as er
-)
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
@@ -30,8 +23,9 @@ from .const import (
     NEW_SENSOR,
     NEW_SWITCH,
 )
-from .api import BestinAPI
+from .center import BestinCenterAPI
 from .controller import BestinController
+from .until import check_ip_or_serial
 
 
 class SerialSocketCommunicator:
@@ -57,14 +51,16 @@ class SerialSocketCommunicator:
         else:
             raise ValueError("Invalid connection string")
 
-    async def connect(self):
+    async def connect(self, timeout=5):
         try:
             if self.is_serial:
-                await self._connect_serial()
+                await asyncio.wait_for(self._connect_serial(), timeout=timeout)
             elif self.is_socket:
-                await self._connect_socket()
+                await asyncio.wait_for(self._connect_socket(), timeout=timeout)
             self.reconnect_attempts = 0
             LOGGER.info("Connection established successfully.")
+        except asyncio.TimeoutError:
+            LOGGER.error(f"Connection timed out.")
         except Exception as e:
             LOGGER.error(f"Connection failed: {e}")
             await self.reconnect()
@@ -159,6 +155,7 @@ class SerialSocketCommunicator:
                 if (
                     packet[1] not in [0x28, 0x31, 0x41, 0x42, 0x61, 0xD1]
                     and packet[1] & 0xF0 != 0x50  # all-in-one(AIO) 0x51-0x55
+                    and packet[1] & 0x30 != 0x30  # gen2 0x31-0x36
                 ):
                     return b''
 
@@ -194,22 +191,6 @@ class SerialSocketCommunicator:
             self.writer = None
 
 
-@callback
-def load_hub(hass: HomeAssistant, entry: ConfigEntry) -> BestinAPI | BestinController:
-    """Return gateway with a matching entry_id."""
-    return hass.data[DOMAIN][entry.entry_id]
-
-def check_ip_or_serial(id: str) -> bool:
-    """Verify that the string is an IP address or serial device path."""
-    ip_pattern = re.compile(r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
-    serial_pattern = re.compile(r"/dev/tty(USB|AMA)\d+")
-
-    if ip_pattern.match(id) or serial_pattern.match(id):
-        return True
-    else:
-        return False
-
-
 class BestinHub:
     """Bestin Hub Class."""
 
@@ -217,11 +198,16 @@ class BestinHub:
         """Hub initialization."""
         self.hass = hass
         self.entry = entry
-        self.api: BestinAPI | BestinController = None
+        self.api: BestinCenterAPI | BestinController = None
         self.communicator: SerialSocketCommunicator = None
         self.gateway_mode: tuple[str, Optional[dict[bytes]]] = None
         self.entities: dict[str, set[str]] = {}
-        self.listeners: list[Callable] = []
+        self.entity_ids: dict[str, str] = {}
+
+    @staticmethod
+    def load_hub(hass: HomeAssistant, entry: ConfigEntry) -> BestinCenterAPI | BestinController:
+        """Return gateway with a matching entry_id."""
+        return hass.data[DOMAIN][entry.entry_id]
 
     @property
     def hub_id(self) -> str:
@@ -284,13 +270,13 @@ class BestinHub:
         if check_ip_or_serial(self.hub_id):
             return f"{self.gateway_mode[0]}-generation"
         else:
-            return f"Center-v{self.version[7:8]}"
+            return self.version
 
     @property
     def conn_str(self) -> str:
         """Generate the connection string based on the host and port."""
         if not re.match(r"/dev/tty(USB|AMA)\d+", self.hub_id):
-            conn_str = f"{self.hub_id}:{self.port}"
+            conn_str = f"{self.hub_id}:{str(self.port)}"
         else:
             conn_str = self.hub_id
         return conn_str
@@ -299,6 +285,7 @@ class BestinHub:
         """The gateway mode is determined by the received data."""
         chunk_storage: list = []
         aio_data: dict = {}
+        gen2_data: dict = {}
         try:
             while len(b''.join(chunk_storage)) < 1024:
                 received_data = await self.communicator._receive_socket()
@@ -319,10 +306,15 @@ class BestinHub:
                 )
                 if (chunk_length in [20, 22] and command_byte in [0x91, 0xB2]):
                     aio_data[room_byte] = command_byte
+                elif (chunk_length in [59, 72, 98] and command_byte == 0x91):
+                    gen2_data[room_byte] = command_byte
 
             if aio_data:
                 self.gateway_mode = ("AIO", aio_data)
                 LOGGER.debug(f"AIO mode set with data: {aio_data}")
+            elif gen2_data:
+                self.gateway_mode = ("Gen2", gen2_data)
+                LOGGER.debug(f"Gen2 mode set with data: {gen2_data}")
             else:
                 self.gateway_mode = ("General", None)
                 LOGGER.debug("General mode set")
@@ -354,7 +346,7 @@ class BestinHub:
         unique_id = device.info.unique_id
         
         if (unique_id in self.entities.get(domain, [])
-            or unique_id in self.hass.data[DOMAIN]):   
+            or device.info.name in self.entity_ids):
             return
         
         args = []
@@ -369,39 +361,26 @@ class BestinHub:
     
     async def connect(self) -> bool:
         """Establish a connection to the serial socket communicator."""
-        if self.communicator is None or not self.available:
+        if not self.communicator or not self.available:
             self.communicator = SerialSocketCommunicator(self.conn_str)
         else:
             await self.communicator.close()
+
         await self.communicator.connect()
         return self.available
     
     async def async_close(self) -> None:
         """Asynchronously close the connection and clean up."""
-        LOGGER.debug(
-            "Starting to remove registered entities and listeners."
-        )
-        
-        entity_registry = er.async_get(self.hass)
-        to_remove = {
-            f"{domain}.{unique_id.split('-')[0]}"
-            for domain, unique_ids in self.entities.items()
-            for unique_id in unique_ids
-        }
-        for entity_id in to_remove:
-            if entity_id in entity_registry.entities:
-                entity_registry.async_remove(entity_id)
-                LOGGER.debug("Removed entity from registry: %s", entity_id)
-        self.listeners.clear()
-
-        await self.api.stop()
+        if self.api:
+            await self.api.stop()
         if self.communicator and self.available:
             await self.communicator.close()
 
     @callback
     async def shutdown(self, event: Event) -> None:
         """Handle shutdown event asynchronously."""  
-        await self.api.stop()
+        if self.api:
+            await self.api.stop()
         if self.communicator and self.available:
             await self.communicator.close()
 
@@ -425,7 +404,6 @@ class BestinHub:
                 self.communicator,
                 self.async_add_device_callback,
             )
-            await asyncio.sleep(1)
             await self.api.start()
         except Exception as ex:
             self.api = None
@@ -439,7 +417,7 @@ class BestinHub:
         Asynchronously initialize the Bestin API for IPARK Smarthome.
         """
         try:
-            self.api = BestinAPI(
+            self.api = BestinCenterAPI(
                 self.hass,
                 self.entry,
                 self.entities,
@@ -450,7 +428,6 @@ class BestinHub:
                 self.async_add_device_callback,
             )
             await self.api.start()
-
         except Exception as ex:
             self.api = None
             raise RuntimeError(
