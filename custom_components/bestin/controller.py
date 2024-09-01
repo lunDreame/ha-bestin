@@ -261,6 +261,8 @@ class BestinController:
         room_id = int(parts[2])
         pos_id = 0
         sub_type = None
+        timestamp = self.timestamp1 if device_type in ["gas", "fan", "doorlock"] \
+            else self.timestamp2
         
         if kwargs:
             sub_type, value = next(iter(kwargs.items()))
@@ -274,7 +276,7 @@ class BestinController:
 
         queue_task = {
             "transmission": 1,
-            "timestamp": self.timestamp,
+            "timestamp": timestamp,
             "device_type": device_type,
             "room_id": room_id,
             "pos_id": pos_id,
@@ -559,21 +561,20 @@ class BestinController:
         header = packet[1]
         packet_len = len(packet)
         room_id = device_state = device_id = None
-        self.timestamp = 0x00
-
+        
         if packet_len == 10:
             command = packet[2]
-            #self.timestamp = packet[3]
+            self.timestamp1 = packet[3]
         else:
             command = packet[3]
-            #self.timestamp = packet[4]
-
-        if packet_len != 10 and command in [0x81, 0x82, 0x91, 0x92, 0xB2]:
+            self.timestamp2 = packet[4]
+        
+        if packet_len != 10 and command in [0x81, 0x82, 0x91, 0x92, 0xB2]:  # response
             if header == 0x28:
                 room_id, device_state = self.parse_thermostat(packet)
                 device_id = f"thermostat_{room_id}"
                 self.setup_device(device_id, device_state)
-            elif ((header == 0x31 and packet_len == 30)
+            elif ((self.gateway_type == "General" and packet_len == 30)
                 or (self.gateway_type == "AIO" and packet_len in [20, 22])
                 or (self.gateway_type == "Gen2" and packet_len in [59, 72, 98])
             ):
@@ -586,8 +587,7 @@ class BestinController:
                 for room_id, state in device_state.items():
                     device_id = f"energy_{room_id}"
                     self.setup_device(device_id, state, is_sub=True)
-
-        elif packet_len == 10 and command != 0x00:
+        elif packet_len == 10 and command != 0x00:  # response
             parser_mapping = {
                 0x31: (self.parse_gas, "gas"),
                 0x41: (self.parse_doorlock, "doorlock"),
@@ -598,7 +598,10 @@ class BestinController:
                 room_id, device_state = parse_func(packet)
                 device_id = f"{device_type}_{room_id}"
                 self.setup_device(device_id, device_state)
-
+        elif command not in [0x00, 0x11, 0x21, 0xA1]:  # query
+            pass
+            #LOGGER.warning(f"Unknown device packet: {packet.hex()}")
+    
     async def handle_packet_queue(self, queue: dict) -> None:
         """Processes the queued command packet data."""
         try:

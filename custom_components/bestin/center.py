@@ -44,19 +44,13 @@ class CenterAPIv2:
     def __init__(self, hass, entry) -> None:
         """API initialization."""
         self.elevator_arrived = False
+        self.elevator_number = entry.data.get("elevator_number", 1)
 
         self.features_list: list = []
         self.elevator_data: dict = {}
 
-    async def process_elevator_request(self) -> None:
-        if not os.path.exists('data.json'):
-            await self.elevator_call_request()
-        else:
-            async with aiofiles.open('data.json', 'r') as file:
-                elevator_data = await file.read()
-                await self.handle_message_info(elevator_data, cache=True)
-    
     async def _v2_device_status(self, args=None):
+        """Updates the v2 device status asynchronously."""
         if args is not None:
             LOGGER.debug(f"Task execution started with argument: {args}")
             self.last_update_time = args
@@ -140,38 +134,34 @@ class CenterAPIv2:
         except Exception as ex:
             LOGGER.error(f"Fetch elevator status error occurred: {ex}")
 
-    async def handle_message_info(self, message, cache=False):
+    async def handle_message_info(self, message) -> None:
         """Handle message info for elevator status monitoring."""
         data = json.loads(message)
-    
-        if not os.path.exists('data.json'):
-            async with aiofiles.open('data.json', 'w') as file:
-                await file.write(json.dumps(data["move_info"], indent=4))
-    
+        
         if "move_info" in data:
-            self.elevator_data.update(data["move_info"])
-            
-            serial = str(self.elevator_data["Serial"])
-            floor = self.elevator_data.get("Floor", "대기")
-            move_dir = self.elevator_data.get("MoveDir", "대기")
+            serial = data["move_info"]["Serial"]
+            move_info = data["move_info"]
 
-            self.setup_device("elevator", 1, serial, False)
-            self.setup_device("elevator", 1, f"floor_{serial}", f"{floor} 층")
-            self.setup_device("elevator", 1, f"direction_{serial}", move_dir)
+            self.elevator_data = {serial: move_info}
+            self.elevator_data = dict(sorted(self.elevator_data.items()))
+            LOGGER.debug("Elevator data: %s", self.elevator_data)
+
+            if len(self.elevator_data) >= 2:
+                for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
+                    floor = f"{info["move_info"]["Floor"]} 층"
+                    move_dir = info["move_info"]["MoveDir"]
+            
+                    self.setup_device("elevator", 1, f"floor_{str(idx)}", floor)
+                    self.setup_device("elevator", 1, f"direction_{str(idx)}", move_dir)
+            else:
+                self.setup_device("elevator", 1, f"floor_1", move_info["Floor"])
+                self.setup_device("elevator", 1, f"direction_1", move_info["MoveDir"])
         else:
-            if cache:
-                elevator_data = data.copy()
-                elevator_data.update({"Floor": "대기", "MoveDir": "대기"})
-                self.elevator_data = elevator_data
+            for idx in range(1, self.elevator_number+1):
+                self.setup_device("elevator", 1, f"floor_{str(idx)}", "도착 층")
+                self.setup_device("elevator", 1, f"direction_{str(idx)}", "도착")
             
-            serial = str(self.elevator_data["Serial"])
-            floor = self.elevator_data.get("Floor", "도착")
-
-            self.setup_device("elevator", 1, f"floor_{serial}", f"{floor} 층")
-            self.setup_device("elevator", 1, f"direction_{serial}", "도착")
-            
-            if not cache:
-                self.elevator_arrived = True
+            self.elevator_arrived = True
 
     async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str) -> None:
         """Request feature command."""
@@ -233,6 +223,10 @@ class CenterAPIv2:
         for feature in features:
             if feature["name"] in ["sensor", "mode"]:
                 continue
+            if feature["name"] == "elevator":
+                for i in range(1, self.elevator_number+1):
+                    self._elevator_registration(str(i))
+                continue
             if feature["quantity"] == 0:
                 LOGGER.debug(f"Skipping feature '{feature['name']}' with quantity 0")
                 continue
@@ -264,6 +258,11 @@ class CenterAPIv2:
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.debug(f"Fetched feature list: {response_data}")
+                    response_data["features"].append({
+                        "name": "elevator",
+                        "quantity": self.elevator_number
+                    })
+                    LOGGER.debug(f"Adding new feature 'elevator': {response_data}")
                     self.features_list.extend(response_data["features"])
                     await self.process_features(response_data["features"])
                 else:
@@ -321,10 +320,6 @@ class BestinCenterAPI(CenterAPIv2):
         self.stop_event.clear()
         self.tasks.append(asyncio.create_task(self.schedule_session_refresh()))
         await asyncio.sleep(1)
-
-        if self.elevator_registration:
-            LOGGER.debug("Processing elevator request")
-            await self.process_elevator_request()
         
         v_key = getattr(self, f"_v{self.version[7:8]}_device_status")
         scan_interval = self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
@@ -544,6 +539,12 @@ class BestinCenterAPI(CenterAPIv2):
         except Exception as ex:
             LOGGER.error(f"Error getting status for {device_type}: {ex}")
 
+    def _elevator_registration(self, id: str) -> None:
+        """Register an elevator with the given ID."""
+        self.setup_device("elevator", 1, id, False)
+        self.setup_device("elevator", 1, f"floor_{id}", "대기 층")
+        self.setup_device("elevator", 1, f"direction_{id}", "대기")
+    
     def _parse_common_status(
         self, device_type: str, device_number: int, unit_num: str, unit_status: str
     ) -> None:
