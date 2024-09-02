@@ -168,8 +168,8 @@ class CenterAPIv2:
         url = f"{self.entry.data[self.version]['url']}/v2/api/features/{device_type}/{room_id}/apply"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": self.entry.data[CONF_UUID],
-            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36"
+            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36",
+            "access-token": self.entry.data[self.version]["access-token"]
         }
         data = {"unit": unit, "state": value}
         if device_type == "ventil":
