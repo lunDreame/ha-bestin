@@ -51,7 +51,8 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub: BestinHub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._is_gas = device.info.device_type == "gas"
+        self._is_gas = device.info.device_type == "gas" # center
+        self._is_cutoff = device.info.device_type == "electric:cutoff" # center
         self._version_exists = getattr(hub.api, "version", False)
 
     @property
@@ -64,6 +65,8 @@ class BestinSwitch(BestinDevice, SwitchEntity):
         if self._version_exists:
             if self._is_gas:
                 await self.enqueue_command("open")
+            elif self._is_cutoff:
+                await self.enqueue_command(switch="set")
             else:
                 await self.enqueue_command(switch="on")
         else:
@@ -74,6 +77,8 @@ class BestinSwitch(BestinDevice, SwitchEntity):
         if self._version_exists:
             if self._is_gas:
                 await self.enqueue_command("close")
+            elif self._is_cutoff:
+                await self.enqueue_command(switch="unset")
             else:
                 await self.enqueue_command(switch="off")
         else:
