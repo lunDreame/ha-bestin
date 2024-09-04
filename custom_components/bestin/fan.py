@@ -29,8 +29,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup fan platform."""
-    hub: BestinHub = BestinHub.load_hub(hass, entry)
-    hub.entities[FAN_DOMAIN] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[FAN_DOMAIN] = set()
 
     @callback
     def async_add_fan(devices=None):
@@ -40,7 +40,7 @@ async def async_setup_entry(
         entities = [
             BestinFan(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[FAN_DOMAIN]
+            if device.unique_id not in hub.entity_groups[FAN_DOMAIN]
         ]
 
         if entities:
@@ -64,8 +64,8 @@ class BestinFan(BestinDevice, FanEntity):
         self._supported_features = FanEntityFeature.SET_SPEED
         self._supported_features |= FanEntityFeature.TURN_ON
         self._supported_features |= FanEntityFeature.TURN_OFF
-        self._speed_list = device.info.state.get("speed_list")
-        self._preset_modes = device.info.state.get("preset_modes")
+        self._speed_list = device.state.get("speed_list")
+        self._preset_modes = device.state.get("preset_modes")
         self._version_exists = getattr(hub.api, "version", False)
 
         if self._preset_modes:
@@ -74,7 +74,7 @@ class BestinFan(BestinDevice, FanEntity):
     @property
     def is_on(self) -> bool:
         """Return true if fan is on."""
-        return self._device.info.state["is_on"]
+        return self._device.state["is_on"]
 
     @property
     def supported_features(self) -> FanEntityFeature:
@@ -84,7 +84,7 @@ class BestinFan(BestinDevice, FanEntity):
     @property
     def percentage(self) -> Optional[int]:
         """Return the current speed percentage."""
-        speed = self._device.info.state["speed"]
+        speed = self._device.state["speed"]
         if speed == "off":
             return 0
         return ordered_list_item_to_percentage(self._speed_list, speed)
@@ -105,7 +105,7 @@ class BestinFan(BestinDevice, FanEntity):
     @property
     def preset_mode(self) -> str:
         """Return the preset mode."""
-        return self._device.info.state["preset_mode"]
+        return self._device.state["preset_mode"]
 
     @property
     def preset_modes(self) -> list:

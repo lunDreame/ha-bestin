@@ -1,24 +1,23 @@
 import asyncio
-from typing import Any, Optional, Callable
+from typing import Any, Callable
 
 from homeassistant.components.climate import HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
-    DOMAIN,
     LOGGER,
     DEFAULT_MAX_TRANSMISSION,
     DEFAULT_PACKET_VIEWER,
+    BRAND_PREFIX,
     PRESET_NATURAL_VENTILATION,
     PRESET_NONE,
     ELEMENT_BYTE_RANGE,
-    DOMAIN_SIGNAL_MAP,
-    DEVICE_DOMAIN_MAP,
+    SIGNAL_MAP,
+    DOMAIN_MAP,
     SPEED_INT_LOW,
     SPEED_INT_MEDIUM,
     SPEED_INT_HIGH,
-    Device,
     DeviceInfo,
 )
 
@@ -57,16 +56,16 @@ class BestinController:
         self, 
         hass: HomeAssistant,
         entry: ConfigEntry,
-        entities: dict,
-        hub_id: str, 
-        communicator,
+        entity_groups,
+        hub_id, 
+        connection,
         add_device_callback: Callable,
     ) -> None:
         self.hass = hass
         self.entry = entry
-        self.entities = entities
+        self.entity_groups = entity_groups
         self.hub_id = hub_id
-        self.communicator = communicator
+        self.connection = connection
         self.add_device_callback = add_device_callback
         self.gateway_type: str = entry.data["gateway_mode"][0]
         self.room_to_command: dict[bytes] = entry.data["gateway_mode"][1]
@@ -78,31 +77,29 @@ class BestinController:
 
     async def start(self) -> None:
         """Start main loop with asyncio."""
-        self.stop_event.clear()
-        await asyncio.sleep(1)
         self.tasks.append(asyncio.create_task(self.process_incoming_data()))
         self.tasks.append(asyncio.create_task(self.process_queue_data()))
+        await asyncio.sleep(1)
 
     async def stop(self) -> None:
         """Stop main loop and cancel all tasks."""
-        self.stop_event.set()
         for task in self.tasks:
             task.cancel()
 
     @property
     def is_alive(self) -> bool:
-        """Check if the communicator is alive"""
-        return self.communicator.is_connected()
+        """Check if the connection is alive"""
+        return self.connection.is_connected()
     
     async def receive_data(self) -> bytes:
-        """Receive data from communicator."""
+        """Receive data from connection."""
         if self.is_alive:
-            return await self.communicator.receive()
+            return await self.connection.receive()
 
     async def send_data(self, packet: bytearray) -> None:
-        """Send packet data to the communicator."""
+        """Send packet data to the connection."""
         if self.is_alive:
-            await self.communicator.send(packet)
+            await self.connection.send(packet)
 
     def calculate_checksum(self, packet: bytearray) -> int:
         """Compute checksum from packet data."""
@@ -123,21 +120,9 @@ class BestinController:
             checksum = (checksum + 1) & 0xFF
         return checksum == packet[-1]
 
-    def convert_unique_id(self, unique_id: str) -> tuple[str, Optional[str]]:
-        """Convert device_id, sub_id from unique_id."""
-        parts = unique_id.split("-")[0].split("_")
-        if len(parts) > 3:
-            sub_id = "_".join(parts[3:])
-            device_id = "_".join(parts[1:3])
-        else:
-            sub_id = None
-            device_id = "_".join(parts[1:3])
-
-        return device_id, sub_id
-
     def get_devices_from_domain(self, domain: str) -> list[dict]:
         """Retrieve devices associated with a specific domain."""
-        entity_list = self.entities.get(domain, [])
+        entity_list = self.entity_groups.get(domain, [])
         return [self.devices.get(uid, {}) for uid in entity_list]
 
     def make_light_packet(
@@ -254,7 +239,7 @@ class BestinController:
         return packet
     
     @callback
-    async def enqueue_command(self, device_id: str, value: Any, **kwargs: Optional[dict]):
+    async def enqueue_command(self, device_id: str, value: Any, **kwargs: dict | None):
         """Queue a command for the device identified by device_id."""
         parts = device_id.split("_")    
         device_type = parts[1]
@@ -288,62 +273,56 @@ class BestinController:
         LOGGER.debug(f"Create queue task: {queue_task}")
         await self.queue.put(queue_task)
     
-    def initialize_device(self, device_id: str, sub_id: Optional[str], state: Any) -> dict:
-        """Initialize devices using a unique_id derived from device_id and sub_id."""
+    def init_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
+        """Initialize a device and add it to the devices list."""
         device_type, device_room = device_id.split("_")
-        
-        base_unique_id = f"bestin_{device_id}"
-        unique_id = f"{base_unique_id}_{sub_id}" if sub_id else base_unique_id
-        full_unique_id = f"{unique_id}-{self.hub_id}"
-        
-        if device_type != "energy" and sub_id and not sub_id.isdigit():
-            letter_sub_id = ''.join(filter(str.isalpha, sub_id))
-            device_type = f"{device_type}:{letter_sub_id}"
-        
-        if full_unique_id not in self.devices:
-            device_info = DeviceInfo(
+    
+        suffix = f"_{sub_id}" if sub_id else ""
+        device_id = f"{BRAND_PREFIX}_{device_id}{suffix}"
+        if sub_id:
+            sub_id_parts = sub_id.split("_")
+            device_name = f"{device_type.title()} {device_room} {' '.join(sub_id_parts)}"
+        else:
+            device_name = f"{device_type.title()} {device_room}"
+        unique_id = f"{device_id}-{self.hub_id}"
+
+        if unique_id not in self.devices:
+            self.devices[unique_id] = DeviceInfo(
                 device_type=device_type,
-                name=unique_id,
+                name=device_name,
                 room=device_room,
                 state=state,
-                unique_id=full_unique_id
-            )
-            device = Device(
-                info=device_info,
-                domain=DEVICE_DOMAIN_MAP[device_type],
+                device_id=device_id,
+                unique_id=unique_id,
+                domain=DOMAIN_MAP[device_type],
                 enqueue_command=self.enqueue_command,
                 callbacks=set()
             )
-            self.devices[full_unique_id] = device
-
-        return self.devices[full_unique_id]
+        return self.devices[unique_id]
     
-    def setup_device(self, device_id: str, state: Any, is_sub=False) -> None:
+    def set_device(self, device_id: str, state: Any, is_sub: bool = False) -> None:
         """Set up device with specified state."""
         device_type, device_room = device_id.split("_")
 
-        if device_type not in DEVICE_DOMAIN_MAP:
+        if device_type not in DOMAIN_MAP:
             raise ValueError(f"Unsupported device type: {device_type}")
         
         sub_states = state.items() if is_sub else [(None, state)]
         for sub_id, sub_state in sub_states:
-            device = self.initialize_device(device_id, sub_id, sub_state)
+            device = self.init_device(device_id, sub_id, sub_state)
 
             if device_type != "energy" and sub_id and not sub_id.isdigit():
                 letter_sub_id = ''.join(filter(str.isalpha, sub_id))
                 letter_device_type = f"{device_type}:{letter_sub_id}"
-                device_domain = DEVICE_DOMAIN_MAP[letter_device_type]
+                domain = DOMAIN_MAP[letter_device_type]
             else:
-                device_domain = DEVICE_DOMAIN_MAP[device_type]
-            
-            domain_signal = DOMAIN_SIGNAL_MAP[device_domain]
-            self.add_device_callback(domain_signal, device)
+                domain = DOMAIN_MAP[device_type]
+            signal = SIGNAL_MAP[domain]
+            self.add_device_callback(signal, device)
 
-            if device.info.state != sub_state:
-                device.info.state = sub_state
-                for callback in device.callbacks:
-                    assert callable(callback), "Callback should be callable"
-                    callback()
+            if device.state != sub_state:
+                device.state = sub_state
+                device.update_callback()
 
     def make_common_packet(
         self,
@@ -573,7 +552,7 @@ class BestinController:
             if header == 0x28:
                 room_id, device_state = self.parse_thermostat(packet)
                 device_id = f"thermostat_{room_id}"
-                self.setup_device(device_id, device_state)
+                self.set_device(device_id, device_state)
             elif ((self.gateway_type == "General" and packet_len == 30)
                 or (self.gateway_type == "AIO" and packet_len in [20, 22])
                 or (self.gateway_type == "Gen2" and packet_len in [59, 72, 98])
@@ -581,12 +560,12 @@ class BestinController:
                 room_id, device_state = getattr(self, f"parse_state_{self.gateway_type}")(packet)
                 for device, state in device_state.items():
                     device_id = f"{device}_{room_id}"
-                    self.setup_device(device_id, state, is_sub=True)
+                    self.set_device(device_id, state, is_sub=True)
             elif header == 0xD1:
                 device_state = self.parse_energy(packet)
                 for room_id, state in device_state.items():
                     device_id = f"energy_{room_id}"
-                    self.setup_device(device_id, state, is_sub=True)
+                    self.set_device(device_id, state, is_sub=True)
         elif packet_len == 10 and command != 0x00:  # response
             parser_mapping = {
                 0x31: (self.parse_gas, "gas"),
@@ -597,7 +576,7 @@ class BestinController:
                 parse_func, device_type = parser_mapping[header]
                 room_id, device_state = parse_func(packet)
                 device_id = f"{device_type}_{room_id}"
-                self.setup_device(device_id, device_state)
+                self.set_device(device_id, device_state)
         elif command not in [0x00, 0x11, 0x21, 0xA1]:  # query
             pass
             #LOGGER.warning(f"Unknown device packet: {packet.hex()}")
@@ -646,8 +625,11 @@ class BestinController:
     async def process_queue_data(self) -> None:
         """Processes items in the task queue."""
         while True:
-            if await self.queue.size() > 0:
-                queue_item = await self.queue.get()
-                await self.handle_packet_queue(queue_item)
-            else:
-                await asyncio.sleep(0.1)
+            try:
+                if await self.queue.size() > 0:
+                    queue_item = await self.queue.get()
+                    await self.handle_packet_queue(queue_item)
+                else:
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                LOGGER.error(f"Error in process_queue_data: {e}")

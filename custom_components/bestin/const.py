@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -27,10 +27,15 @@ PLATFORMS: list[Platform] = [
 LOGGER: logging.Logger = logging.getLogger(__package__)
 
 DEFAULT_PORT: int = 8899
-DEFAULT_SCAN_INTERVAL: int = 15
+DEFAULT_SCAN_INTERVAL: int = 30
 DEFAULT_MAX_TRANSMISSION: int = 10
 
 DEFAULT_PACKET_VIEWER: bool = False
+
+BRAND_PREFIX = "bestin"
+
+VERSION_1 = "version1.0"
+VERSION_2 = "version2.0"
 
 NEW_CLIMATE = "climates"
 NEW_FAN = "fans"
@@ -48,7 +53,7 @@ MAIN_DEVICES: list[str] = [
     "elevator",
 ]
 
-DOMAIN_SIGNAL_MAP: dict[str, Platform] = {
+SIGNAL_MAP: dict[str, Platform] = {
     Platform.CLIMATE: NEW_CLIMATE,
     Platform.FAN: NEW_FAN,
     Platform.LIGHT: NEW_LIGHT,
@@ -56,20 +61,20 @@ DOMAIN_SIGNAL_MAP: dict[str, Platform] = {
     Platform.SWITCH: NEW_SWITCH,
 }
 
-DEVICE_DOMAIN_MAP: dict[str, Platform] = {
-    "thermostat": Platform.CLIMATE,
-    "fan": Platform.FAN,
-    "light": Platform.LIGHT,
-    "outlet:consumption": Platform.SENSOR,
-    "energy": Platform.SENSOR,
-    "outlet": Platform.SWITCH,
-    "outlet:cutoff": Platform.SWITCH,
-    "gas": Platform.SWITCH,
-    "doorlock": Platform.SWITCH,
+DOMAIN_MAP: dict[str, Platform] = {
+    "thermostat": Platform.CLIMATE.value,
+    "fan": Platform.FAN.value,
+    "light": Platform.LIGHT.value,
+    "outlet:consumption": Platform.SENSOR.value,
+    "energy": Platform.SENSOR.value,
+    "outlet": Platform.SWITCH.value,
+    "outlet:cutoff": Platform.SWITCH.value,
+    "gas": Platform.SWITCH.value,
+    "doorlock": Platform.SWITCH.value,
 }
 
 # Center
-CTR_DOMAIN_SIGNAL_MAP: dict[Platform, str] = {
+CTR_SIGNAL_MAP: dict[Platform, str] = {
     Platform.CLIMATE: NEW_CLIMATE,
     Platform.FAN: NEW_FAN,
     Platform.LIGHT: NEW_LIGHT,
@@ -77,18 +82,19 @@ CTR_DOMAIN_SIGNAL_MAP: dict[Platform, str] = {
     Platform.SWITCH: NEW_SWITCH,
 }
 
-CTR_DEVICE_DOMAIN_MAP: dict[str, Platform] = {
-    "temper": Platform.CLIMATE,
-    "thermostat": Platform.CLIMATE,
-    "ventil": Platform.FAN,
-    "light": Platform.LIGHT,
-    "livinglight": Platform.LIGHT,
-    "elevator:direction": Platform.SENSOR,
-    "elevator:floor": Platform.SENSOR,
-    "electric": Platform.SWITCH,
-    "electric:cutoff": Platform.SWITCH,
-    "gas": Platform.SWITCH,
-    "elevator": Platform.SWITCH,
+CTR_DOMAIN_MAP: dict[str, Platform] = {
+    "temper": Platform.CLIMATE.value,
+    "thermostat": Platform.CLIMATE.value,
+    "ventil": Platform.FAN.value,
+    "light": Platform.LIGHT.value,
+    "smartlight": Platform.LIGHT.value,
+    "livinglight": Platform.LIGHT.value,
+    "elevator:direction": Platform.SENSOR.value,
+    "elevator:floor": Platform.SENSOR.value,
+    "electric": Platform.SWITCH.value,
+    "electric:cutoff": Platform.SWITCH.value,
+    "gas": Platform.SWITCH.value,
+    "elevator": Platform.SWITCH.value,
 }
 
 # Fan (Ventil)
@@ -164,21 +170,17 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 
 @dataclass
 class DeviceInfo:
-    """Represents the basic information of a device."""
+    """Represents a device with callbacks and update functionalities."""
     device_type: str
     name: str
     room: str
     state: Any
+    device_id: str
     unique_id: str
-
-@dataclass
-class Device:
-    """Represents a device with callbacks and update functionalities."""
-    info: DeviceInfo
     domain: str
     enqueue_command: Callable
     callbacks: Set[Callable] = field(default_factory=set)
-    
+
     def add_callback(self, callback: Callable):
         """Add a callback to the set of callbacks."""
         self.callbacks.add(callback)
@@ -186,3 +188,9 @@ class Device:
     def remove_callback(self, callback: Callable):
         """Remove a callback from the set of callbacks, if it exists."""
         self.callbacks.discard(callback)
+    
+    def update_callback(self):
+        """Trigger all registered callbacks."""
+        for callback in self.callbacks:
+            assert callable(callback), "Callback should be callable"
+            callback()

@@ -19,8 +19,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup switch platform."""
-    hub: BestinHub = BestinHub.load_hub(hass, entry)
-    hub.entities[SWITCH_DOMAIN] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[SWITCH_DOMAIN] = set()
 
     @callback
     def async_add_switch(devices=None):
@@ -30,7 +30,7 @@ async def async_setup_entry(
         entities = [
             BestinSwitch(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[SWITCH_DOMAIN]
+            if device.unique_id not in hub.entity_groups[SWITCH_DOMAIN]
         ]
 
         if entities:
@@ -51,14 +51,14 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub: BestinHub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._is_gas = device.info.device_type == "gas" # center
-        self._is_cutoff = device.info.device_type == "electric:cutoff" # center
+        self._is_gas = device.device_type == "gas" # center
+        self._is_cutoff = device.device_type == "electric:cutoff" # center
         self._version_exists = getattr(hub.api, "version", False)
 
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        return self._device.info.state
+        return self._device.state
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""
@@ -83,3 +83,4 @@ class BestinSwitch(BestinDevice, SwitchEntity):
                 await self.enqueue_command(switch="off")
         else:
             await self.enqueue_command(False)
+    

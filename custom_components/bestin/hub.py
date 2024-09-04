@@ -1,3 +1,4 @@
+"""Hub class."""
 import re
 import time
 import asyncio
@@ -5,7 +6,7 @@ import serial_asyncio
 import socket
 import traceback
 
-from typing import Optional, cast
+from typing import cast
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, CONF_PORT
@@ -22,28 +23,32 @@ from .const import (
     NEW_LIGHT,
     NEW_SENSOR,
     NEW_SWITCH,
+    VERSION_2
 )
 from .center import BestinCenterAPI
 from .controller import BestinController
 from .until import check_ip_or_serial
 
 
-class SerialSocketCommunicator:
-    def __init__(self, conn_str):
+class ConnectionManager:
+    """Manage connections to the hub."""
+    
+    def __init__(self, conn_str: str) -> None:
         self.conn_str = conn_str
         self.is_serial = False
         self.is_socket = False
-        self.reader = None
-        self.writer = None
-        self.reconnect_attempts = 0
-        self.last_reconnect_attempt = None
-        self.next_attempt_time = None
+        self.reader: asyncio.StreamReader = None
+        self.writer: asyncio.StreamWriter = None
+        self.reconnect_attempts: int = 0
+        self.last_reconnect_attempt: float = None
+        self.next_attempt_time: float = None
 
         self.chunk_size = 64  # Serial standard
         self.constant_packet_length = 10
         self._parse_conn_str()
 
-    def _parse_conn_str(self):
+    def _parse_conn_str(self) -> bool:
+        """Parse the connection string."""
         if re.match(r"COM\d+|/dev/tty\w+", self.conn_str):
             self.is_serial = True
         elif re.match(r"\d+\.\d+\.\d+\.\d+:\d+", self.conn_str):
@@ -51,7 +56,11 @@ class SerialSocketCommunicator:
         else:
             raise ValueError("Invalid connection string")
 
-    async def connect(self, timeout=5):
+    async def connect(self, timeout: int = 5) -> None:
+        """
+        Attempt to connect for each communication;
+        failure to connect within a timeout is considered a failure.
+        """
         try:
             if self.is_serial:
                 await asyncio.wait_for(self._connect_serial(), timeout=timeout)
@@ -61,20 +70,24 @@ class SerialSocketCommunicator:
             LOGGER.info("Connection established successfully.")
         except asyncio.TimeoutError:
             LOGGER.error(f"Connection timed out.")
+            raise TimeoutError()
         except Exception as e:
             LOGGER.error(f"Connection failed: {e}")
             await self.reconnect()
 
-    async def _connect_serial(self):
+    async def _connect_serial(self) -> None:
+        """Attempt to connect a serial."""
         self.reader, self.writer = await serial_asyncio.open_serial_connection(url=self.conn_str, baudrate=9600)
         LOGGER.info(f"Serial connection established on {self.conn_str}")
 
-    async def _connect_socket(self):
+    async def _connect_socket(self) -> None:
+        """Attempt to connect a socket."""
         host, port = self.conn_str.split(":")
         self.reader, self.writer = await asyncio.open_connection(host, int(port))
         LOGGER.info(f"Socket connection established to {host}:{port}")
 
-    def is_connected(self):
+    def is_connected(self) -> bool:
+        """Verify that the connection is maintained."""
         try:
             if self.is_serial:
                 return self.writer is not None and not self.writer.transport.is_closing()
@@ -83,7 +96,11 @@ class SerialSocketCommunicator:
         except Exception:
             return False
 
-    async def reconnect(self):
+    async def reconnect(self) -> bool | None:
+        """
+        If the connection is disconnected, try to reconnect.
+        It is flexible so that it does not show off in the same amount of time.
+        """
         if self.writer is not None:
             self.writer.close()
             await self.writer.wait_closed()
@@ -105,7 +122,8 @@ class SerialSocketCommunicator:
             self.reconnect_attempts = 0
             self.next_attempt_time = None
 
-    async def send(self, packet):
+    async def send(self, packet: bytearray) -> None:
+        """Send packet data."""
         try:
             self.writer.write(packet)
             await self.writer.drain()
@@ -114,7 +132,8 @@ class SerialSocketCommunicator:
             LOGGER.error(f"Failed to send packet data: {e}")
             await self.reconnect()
 
-    async def receive(self, size=64):
+    async def receive(self, size: int = 64) -> bytes | None:
+        """Receive data."""
         try:
             if self.chunk_size == size: 
                 return await self._receive_socket()
@@ -127,8 +146,11 @@ class SerialSocketCommunicator:
             await self.reconnect()
             return None
 
-    async def _receive_socket(self):
+    async def _receive_socket(self) -> bytes:
+        """Receives and processes socket data."""
+        
         async def recv_exactly(n):
+            """Creates a buffer by a specific length."""
             data = b''
             while len(data) < n:
                 chunk = await self.reader.read(n - len(data))
@@ -183,7 +205,8 @@ class SerialSocketCommunicator:
         
         return b''
     
-    async def close(self):
+    async def close(self) -> None:
+        """Terminate the connection."""
         if self.writer:
             LOGGER.info("Connection closed.")
             self.writer.close()
@@ -199,13 +222,13 @@ class BestinHub:
         self.hass = hass
         self.entry = entry
         self.api: BestinCenterAPI | BestinController = None
-        self.communicator: SerialSocketCommunicator = None
-        self.gateway_mode: tuple[str, Optional[dict[bytes]]] = None
-        self.entities: dict[str, set[str]] = {}
-        self.entity_ids: dict[str, str] = {}
+        self.connection: ConnectionManager = None
+        self.gateway_mode: tuple[str, dict[bytes] | None] = None
+        self.entity_groups: dict[str, set[str]] = {}
+        self.entity_to_id: dict[str, str] = {}
 
     @staticmethod
-    def load_hub(hass: HomeAssistant, entry: ConfigEntry) -> BestinCenterAPI | BestinController:
+    def get_hub(hass: HomeAssistant, entry: ConfigEntry) -> BestinCenterAPI | BestinController:
         """Return gateway with a matching entry_id."""
         return hass.data[DOMAIN][entry.entry_id]
 
@@ -237,8 +260,8 @@ class BestinHub:
     @property
     def available(self) -> bool:
         """Return the communication connection status."""
-        if self.communicator:
-            return self.communicator.is_connected()
+        if self.connection:
+            return self.connection.is_connected()
         return True
 
     @property
@@ -288,7 +311,7 @@ class BestinHub:
         gen2_data: dict = {}
         try:
             while len(b''.join(chunk_storage)) < 1024:
-                received_data = await self.communicator._receive_socket()
+                received_data = await self.connection._receive_socket()
                 if not received_data:
                     break
                 chunk_storage.append(received_data)
@@ -342,11 +365,12 @@ class BestinHub:
         self, device_type: str, device=None, force: bool = False
     ) -> None:
         """Add device callback if not already registered."""
-        domain = device.domain.value
-        unique_id = device.info.unique_id
+        domain = device.domain
+        unique_id = device.unique_id
         
-        if (unique_id in self.entities.get(domain, [])
-            or device.info.name in self.entity_ids):
+        if (unique_id in self.entity_groups.get(domain, set())
+            or device.device_id in self.entity_to_id
+        ):
             return
         
         args = []
@@ -360,36 +384,41 @@ class BestinHub:
         )
     
     async def connect(self) -> bool:
-        """Establish a connection to the serial socket communicator."""
-        if not self.communicator or not self.available:
-            self.communicator = SerialSocketCommunicator(self.conn_str)
+        """Establish a connection to the serial socket connection."""
+        if not self.connection or not self.available:
+            self.connection = ConnectionManager(self.conn_str)
         else:
-            await self.communicator.close()
+            await self.connection.close()
 
-        await self.communicator.connect()
+        await self.connection.connect()
         return self.available
     
     async def async_close(self) -> None:
         """Asynchronously close the connection and clean up."""
         if self.api:
             await self.api.stop()
-        if self.communicator and self.available:
-            await self.communicator.close()
+        if self.connection and self.available:
+            await self.connection.close()
+        if self.gateway_mode:
+            self.gateway_mode = None
 
     @callback
     async def shutdown(self, event: Event) -> None:
         """Handle shutdown event asynchronously."""  
         if self.api:
             await self.api.stop()
-        if self.communicator and self.available:
-            await self.communicator.close()
-
+        if self.connection and self.available:
+            await self.connection.close()
+        if self.gateway_mode:
+            self.gateway_mode = None
+    
     async def async_initialize_serial(self) -> None:
         """
         Asynchronously initialize the Bestin Controller for serial communication.
         """
         try:
-            await self.determine_gateway_mode()
+            if self.gateway_mode is None:
+                await self.determine_gateway_mode()
 
             self.hass.config_entries.async_update_entry(
                 entry=self.entry,
@@ -399,12 +428,15 @@ class BestinHub:
             self.api = BestinController(
                 self.hass,
                 self.entry,
-                self.entities,
+                self.entity_groups,
                 self.hub_id,
-                self.communicator,
+                self.connection,
                 self.async_add_device_callback,
             )
-            await self.api.start()
+            if isinstance(self.api, BestinController):
+                await self.api.start()
+            else:
+                raise Exception("API is not an instance of BestinController")
         except Exception as ex:
             self.api = None
             raise RuntimeError(
@@ -420,14 +452,17 @@ class BestinHub:
             self.api = BestinCenterAPI(
                 self.hass,
                 self.entry,
-                self.entities,
+                self.entity_groups,
                 self.hub_id,
                 self.version,
                 self.identifier,
-                self.version == "version2.0" and self.ip_address,
+                self.version == VERSION_2 and self.ip_address,
                 self.async_add_device_callback,
             )
-            await self.api.start()
+            if isinstance(self.api, BestinCenterAPI):
+                await self.api.start()
+            else:
+                raise Exception("API is not an instance of BestinCenterAPI")
         except Exception as ex:
             self.api = None
             raise RuntimeError(

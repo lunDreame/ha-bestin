@@ -24,8 +24,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup climate platform."""
-    hub: BestinHub = BestinHub.load_hub(hass, entry)
-    hub.entities[CLIMATE_DOMAIN] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[CLIMATE_DOMAIN] = set()
 
     @callback
     def async_add_climate(devices=None):
@@ -35,7 +35,7 @@ async def async_setup_entry(
         entities = [
             BestinClimate(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[CLIMATE_DOMAIN]
+            if device.unique_id not in hub.entity_groups[CLIMATE_DOMAIN]
         ]
 
         if entities:
@@ -77,7 +77,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
         Need to be one of HVAC_MODE_*.
         """
-        return self._device.info.state["hvac_mode"]
+        return self._device.state["hvac_mode"]
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -122,12 +122,12 @@ class BestinClimate(BestinDevice, ClimateEntity):
     @property
     def current_temperature(self) -> float:
         """Return the current temperature."""
-        return self._device.info.state["current_temperature"]
+        return self._device.state["current_temperature"]
 
     @property
     def target_temperature(self) -> float:
         """Return the target temperature."""
-        return self._device.info.state["target_temperature"]
+        return self._device.state["target_temperature"]
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""

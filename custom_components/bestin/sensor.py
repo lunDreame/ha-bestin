@@ -34,8 +34,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup sensor platform."""
-    hub: BestinHub = BestinHub.load_hub(hass, entry)
-    hub.entities[DOMAIN_SENSOR] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[DOMAIN_SENSOR] = set()
 
     @callback
     def async_add_sensor(devices=None):
@@ -45,7 +45,7 @@ async def async_setup_entry(
         entities = [
             BestinSensor(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[DOMAIN_SENSOR]
+            if device.unique_id not in hub.entity_groups[DOMAIN_SENSOR]
         ]
 
         if entities:
@@ -66,7 +66,7 @@ class BestinSensor(BestinDevice):
     def __init__(self, device, hub) -> None:
         """Initialize the sensor."""
         super().__init__(device, hub)
-        self._attr_id = extract_and_transform(self.device_name)
+        self._attr_id = extract_and_transform(self._device.device_id)
         self._is_general = hub.wp_version == "General"
     
     @property
@@ -79,7 +79,7 @@ class BestinSensor(BestinDevice):
         if isinstance(factor, list) and len(factor) == 2:
             factor = factor[0] if self._is_general else factor[1]
         
-        return factor(self._device.info.state)
+        return factor(self._device.state)
     
     @property
     def device_class(self):

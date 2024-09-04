@@ -18,18 +18,15 @@ class BestinBase:
         """Set up device and update callbacks."""
         self._device = device
         self.hub = hub
-        
-        self.device_name = device.info.name
-        self.device_type = device.info.device_type
     
     async def enqueue_command(self, data: Any = None, **kwargs):
         """Send commands to the device."""
-        await self._device.enqueue_command(self.device_name, data, **kwargs)
+        await self._device.enqueue_command(self._device.device_id, data, **kwargs)
 
     @property
     def unique_id(self) -> str:
         """Return a unique ID."""
-        return self._device.info.unique_id
+        return self._device.unique_id
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -43,8 +40,8 @@ class BestinBase:
             "sw_version": self.hub.sw_version,
             "via_device": (DOMAIN, self.hub.hub_id),
         }
-        if self.device_type not in MAIN_DEVICES:
-            formatted_device_type = formatted_name(self.device_type)
+        if (device_type := self._device.device_type) not in MAIN_DEVICES:
+            formatted_device_type = formatted_name(device_type)
             device_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{formatted_device_type}")}
             device_info["name"] = f"{self.hub.name} {formatted_device_type}"
         
@@ -59,7 +56,9 @@ class BestinDevice(BestinBase, Entity):
     def __init__(self, device, hub):
         """Set up device and update callbacks."""
         super().__init__(device, hub)
-        self.hub.entities[self.TYPE].add(self.unique_id)
+        self.hub.entity_groups[self.TYPE].add(self.unique_id)
+        self._attr_name = self._device.name
+        self._attr_has_entity_name = True
 
     @property
     def entity_registry_enabled_default(self):
@@ -69,14 +68,14 @@ class BestinDevice(BestinBase, Entity):
     async def async_added_to_hass(self):
         """Subscribe to device events."""
         self._device.add_callback(self.async_update_callback)
-        self.hub.entity_ids[self.entity_id] = self.device_name
+        self.hub.entity_to_id[self.entity_id] = self._device.device_id
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Disconnect device object when removed."""
         self._device.remove_callback(self.async_update_callback)
-        del self.hub.entity_ids[self.entity_id]
-        self.hub.entities[self.TYPE].remove(self.unique_id)
+        del self.hub.entity_to_id[self.entity_id]
+        self.hub.entity_groups[self.TYPE].remove(self.unique_id)
 
     @callback
     def async_restore_last_state(self, last_state) -> None:
@@ -94,11 +93,6 @@ class BestinDevice(BestinBase, Entity):
         return self.hub.available
 
     @property
-    def name(self) -> str:
-        """Return the name of the device."""
-        return self.device_name
-
-    @property
     def should_poll(self) -> bool:
         """Determine if the device should be polled."""
         return self.hub.is_polling
@@ -108,10 +102,10 @@ class BestinDevice(BestinBase, Entity):
         """Return the state attributes of the sensor."""
         attributes = {
             "unique_id": self.unique_id,
-            "device_type": self.device_type,
-            "device_room": self._device.info.room,
+            "device_type": self._device.device_type,
+            "device_room": self._device.room,
         }
-        if self.should_poll:
+        if self.should_poll and not self._device.device_type.startswith("elevator"):
             attributes["last_update_time"] = self.hub.api.last_update_time
         
         return attributes
