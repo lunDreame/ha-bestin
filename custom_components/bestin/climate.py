@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.climate import DOMAIN, ClimateEntity
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN, ClimateEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import NEW_CLIMATE
 from .device import BestinDevice
-from .hub import load_hub
+from .hub import BestinHub
 
 
 async def async_setup_entry(
@@ -24,24 +24,24 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup climate platform."""
-    hub = load_hub(hass, entry)
-    hub.entities[DOMAIN] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[CLIMATE_DOMAIN] = set()
 
     @callback
     def async_add_climate(devices=None):
         if devices is None:
-            devices = hub.api.get_devices_from_domain(DOMAIN)
+            devices = hub.api.get_devices_from_domain(CLIMATE_DOMAIN)
 
         entities = [
             BestinClimate(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[DOMAIN]
+            if device.unique_id not in hub.entity_groups[CLIMATE_DOMAIN]
         ]
 
         if entities:
             async_add_entities(entities)
 
-    hub.listeners.append(
+    entry.async_on_unload(
         async_dispatcher_connect(
             hass, hub.async_signal_new_device(NEW_CLIMATE), async_add_climate
         )
@@ -51,11 +51,11 @@ async def async_setup_entry(
 
 class BestinClimate(BestinDevice, ClimateEntity):
     """Defined the Climate."""
-    TYPE = DOMAIN
+    TYPE = CLIMATE_DOMAIN
     
     _enable_turn_on_off_backwards_compatibility = False
 
-    def __init__(self, device, hub):
+    def __init__(self, device, hub: BestinHub):
         """Initialize the climate."""
         super().__init__(device, hub)
         self._supported_features = (
@@ -77,7 +77,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
         Need to be one of HVAC_MODE_*.
         """
-        return self._device.info.state["hvac_mode"]
+        return self._device_info.state["hvac_mode"]
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -97,10 +97,10 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
         if self._version_exists:
             is_on = "on" if hvac_mode == HVACMode.HEAT else "off"
-            await self._on_command(room=f"{is_on}/{self.target_temperature}")
+            await self.enqueue_command(room=f"{is_on}/{self.target_temperature}")
         else:
             is_on = True if hvac_mode == HVACMode.HEAT else False
-            await self._on_command(mode=is_on)
+            await self.enqueue_command(mode=is_on)
 
     @property
     def preset_mode(self):
@@ -122,12 +122,12 @@ class BestinClimate(BestinDevice, ClimateEntity):
     @property
     def current_temperature(self) -> float:
         """Return the current temperature."""
-        return self._device.info.state["current_temperature"]
+        return self._device_info.state["current_temperature"]
 
     @property
     def target_temperature(self) -> float:
         """Return the target temperature."""
-        return self._device.info.state["target_temperature"]
+        return self._device_info.state["target_temperature"]
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
@@ -137,9 +137,9 @@ class BestinClimate(BestinDevice, ClimateEntity):
         temperature = float(kwargs[ATTR_TEMPERATURE])
 
         if self._version_exists:
-            await self._on_command(room=f"on/{temperature}/{self.current_temperature}")
+            await self.enqueue_command(room=f"on/{temperature}/{self.current_temperature}")
         else:
-            await self._on_command(set_temperature=temperature)
+            await self.enqueue_command(set_temperature=temperature)
 
     @property
     def temperature_unit(self) -> UnitOfTemperature:

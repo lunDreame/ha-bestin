@@ -33,8 +33,8 @@
             },
             "center_v2": {
                 "data": {
+                    "elevator_number": "Elevator number",
                     "ip_address": "IP address",
-                    "elevator_count": "Elevator count",
                     "uuid": "UUID"
                 },
                 "data_description": {

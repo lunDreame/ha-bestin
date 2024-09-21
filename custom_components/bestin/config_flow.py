@@ -31,7 +31,6 @@ from .const import (
     DOMAIN,
     LOGGER,
     DEFAULT_PORT,
-    DEFAULT_ELEVATOR_COUNT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_MAX_TRANSMISSION,
     DEFAULT_PACKET_VIEWER,
@@ -190,7 +189,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             session = async_create_clientsession(self.hass)
 
             response, error_message = await self._v1_server_login(session)
- 
+
             if error_message:
                 errors["base"] = error_message[0]
                 description_placeholders = {"err": error_message[1]}
@@ -237,8 +236,8 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=user_input[self.config_identifier], data=self.data)
 
         data_schema = vol.Schema({
+            vol.Required("elevator_number", default=1): ConfigFlow.int_between(1, 3),
             vol.Optional(CONF_IP_ADDRESS): cv.string,
-            vol.Required("elevator_count", default=DEFAULT_ELEVATOR_COUNT): ConfigFlow.int_between(1, 3),
             vol.Required(CONF_UUID): cv.string,
         })
 

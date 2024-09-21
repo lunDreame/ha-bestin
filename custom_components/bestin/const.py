@@ -1,6 +1,6 @@
 import logging
 
-from typing import Callable, Any, Optional, Set
+from typing import Callable, Any, Set
 from dataclasses import dataclass, field
 
 from homeassistant.components.sensor import SensorDeviceClass
@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.1.1"
+VERSION = "1.3.3"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -27,11 +27,15 @@ PLATFORMS: list[Platform] = [
 LOGGER: logging.Logger = logging.getLogger(__package__)
 
 DEFAULT_PORT: int = 8899
-DEFAULT_ELEVATOR_COUNT: int = 1
-DEFAULT_SCAN_INTERVAL: int = 15
+DEFAULT_SCAN_INTERVAL: int = 30
 DEFAULT_MAX_TRANSMISSION: int = 10
 
 DEFAULT_PACKET_VIEWER: bool = False
+
+BRAND_PREFIX = "bestin"
+
+VERSION_1 = "version1.0"
+VERSION_2 = "version2.0"
 
 NEW_CLIMATE = "climates"
 NEW_FAN = "fans"
@@ -49,57 +53,48 @@ MAIN_DEVICES: list[str] = [
     "elevator",
 ]
 
-DEVICE_TYPE_MAP: dict[str] = {
-    "thermostat": NEW_CLIMATE,
-    "fan": NEW_FAN,
-    "light": NEW_LIGHT,
-    "outlet:consumption": NEW_SENSOR,
-    "energy": NEW_SENSOR,
-    "outlet": NEW_SWITCH,
-    "outlet:cutoff": NEW_SWITCH,
-    "gas": NEW_SWITCH,
-    "doorlock": NEW_SWITCH,
+SIGNAL_MAP: dict[str, Platform] = {
+    Platform.CLIMATE: NEW_CLIMATE,
+    Platform.FAN: NEW_FAN,
+    Platform.LIGHT: NEW_LIGHT,
+    Platform.SENSOR: NEW_SENSOR,
+    Platform.SWITCH: NEW_SWITCH,
 }
 
-DEVICE_PLATFORM_MAP: dict[str, Platform] = {
-    "thermostat": Platform.CLIMATE,
-    "fan": Platform.FAN,
-    "light": Platform.LIGHT,
-    "outlet:consumption": Platform.SENSOR,
-    "energy": Platform.SENSOR,
-    "outlet": Platform.SWITCH,
-    "outlet:cutoff": Platform.SWITCH,
-    "gas": Platform.SWITCH,
-    "doorlock": Platform.SWITCH,
+DOMAIN_MAP: dict[str, Platform] = {
+    "thermostat": Platform.CLIMATE.value,
+    "fan": Platform.FAN.value,
+    "light": Platform.LIGHT.value,
+    "outlet:consumption": Platform.SENSOR.value,
+    "energy": Platform.SENSOR.value,
+    "outlet": Platform.SWITCH.value,
+    "outlet:cutoff": Platform.SWITCH.value,
+    "gas": Platform.SWITCH.value,
+    "doorlock": Platform.SWITCH.value,
 }
 
 # Center
-DEVICE_CTR_TYPE_MAP: dict[str] = {
-    "temper": NEW_CLIMATE,
-    "thermostat": NEW_CLIMATE,
-    "ventil": NEW_FAN,
-    "light": NEW_LIGHT,
-    "livinglight": NEW_LIGHT,
-    "elevator:direction": NEW_SENSOR,
-    "elevator:floor": NEW_SENSOR,
-    "electric": NEW_SWITCH,
-    "electric:cutoff": NEW_SWITCH,
-    "gas": NEW_SWITCH,
-    "elevator": NEW_SWITCH,
+CTR_SIGNAL_MAP: dict[Platform, str] = {
+    Platform.CLIMATE: NEW_CLIMATE,
+    Platform.FAN: NEW_FAN,
+    Platform.LIGHT: NEW_LIGHT,
+    Platform.SENSOR: NEW_SENSOR,
+    Platform.SWITCH: NEW_SWITCH,
 }
 
-DEVICE_CTR_PLATFORM_MAP: dict[str, Platform] = {
-    "temper": Platform.CLIMATE,
-    "thermostat": Platform.CLIMATE,
-    "ventil": Platform.FAN,
-    "light": Platform.LIGHT,
-    "livinglight": Platform.LIGHT,
-    "elevator:direction": Platform.SENSOR,
-    "elevator:floor": Platform.SENSOR,
-    "electric": Platform.SWITCH,
-    "electric:cutoff": Platform.SWITCH,
-    "gas": Platform.SWITCH,
-    "elevator": Platform.SWITCH,
+CTR_DOMAIN_MAP: dict[str, Platform] = {
+    "temper": Platform.CLIMATE.value,
+    "thermostat": Platform.CLIMATE.value,
+    "ventil": Platform.FAN.value,
+    "light": Platform.LIGHT.value,
+    "smartlight": Platform.LIGHT.value,
+    "livinglight": Platform.LIGHT.value,
+    "elevator:direction": Platform.SENSOR.value,
+    "elevator:floor": Platform.SENSOR.value,
+    "electric": Platform.SWITCH.value,
+    "electric:cutoff": Platform.SWITCH.value,
+    "gas": Platform.SWITCH.value,
+    "elevator": Platform.SWITCH.value,
 }
 
 # Fan (Ventil)
@@ -175,27 +170,32 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 
 @dataclass
 class DeviceInfo:
-    """Represents the basic information of a device."""
-    unique_id: str
+    """Set device information."""
     device_type: str
     name: str
     room: str
     state: Any
-    colon_id: Optional[str] = None
-    sub_type: Optional[str] = None
+    device_id: str
 
 @dataclass
-class Device:
-    """Represents a device with callbacks and update functionalities."""
-    info: DeviceInfo
+class DeviceProfile:
+    """Set the device profile."""
+    enqueue_command: Callable[..., None]
     domain: str
-    on_command: Callable
-    callbacks: Set[Callable] = field(default_factory=set)
-    
-    def add_callback(self, callback: Callable):
-        """Add a callback to the set of callbacks."""
+    unique_id: str
+    info: DeviceInfo
+    callbacks: Set[Callable[..., None]] = field(default_factory=set)
+
+    def add_callback(self, callback: Callable[..., None]) -> None:
+        """Add a callback.."""
         self.callbacks.add(callback)
 
-    def remove_callback(self, callback: Callable):
-        """Remove a callback from the set of callbacks, if it exists."""
+    def remove_callback(self, callback: Callable[..., None]) -> None:
+        """Remove the callback."""
         self.callbacks.discard(callback)
+    
+    def update_callbacks(self) -> None:
+        """Updates the registered callback."""
+        for callback in self.callbacks:
+            assert callable(callback), "Callback should be callable"
+            callback()

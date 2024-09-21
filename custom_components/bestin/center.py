@@ -1,18 +1,13 @@
-import os
 import hashlib
 import base64
 import asyncio
-import aiofiles
 import xmltodict
 import xml.etree.ElementTree as ET
-import ssl
 import aiohttp
 import json
-#import requests
-#import sseclient
 
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.climate import HVACMode
@@ -27,37 +22,39 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
-    DOMAIN,
     LOGGER,
+    BRAND_PREFIX,
     DEFAULT_SCAN_INTERVAL,
+    VERSION_1,
+    VERSION_2,
     SPEED_STR_LOW,
     SPEED_STR_MEDIUM,
     SPEED_STR_HIGH,
-    DEVICE_CTR_TYPE_MAP,
-    DEVICE_CTR_PLATFORM_MAP,
-    Device,
+    MAIN_DEVICES,
+    CTR_SIGNAL_MAP,
+    CTR_DOMAIN_MAP,
+    DeviceProfile,
     DeviceInfo,
 )
 
+V2_SESSION_HEADER = {
+    "Content-Type": "application/json",
+    "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36",
+}
 
-class BestinAPIv2:
+class CenterAPIv2:
     """Bestin HDC Smarthome API v2 Class."""
 
-    def __init__(self, hass, entry) -> None:        
+    def __init__(self, hass, entry) -> None:
         """API initialization."""
-        self.elevator_count = entry.data.get("elevator_count", 1)
         self.elevator_arrived = False
+        self.elevator_number = entry.data.get("elevator_number", 1)
 
         self.features_list: list = []
         self.elevator_data: dict = {}
 
-    def setup_elevators(self):
-        for count in range(1, self.elevator_count + 1):
-            self.setup_device("elevator", 1, str(count), False)
-            self.setup_device("elevator", 1, f"floor_{str(count)}", "대기 층")
-            self.setup_device("elevator", 1, f"direction_{str(count)}", "대기")
-
-    async def _v2_device_status(self, args=None):
+    async def _version2_device_status(self, args=None):
+        """Updates the version 2 device status asynchronously."""
         if args is not None:
             LOGGER.debug(f"Task execution started with argument: {args}")
             self.last_update_time = args
@@ -67,14 +64,15 @@ class BestinAPIv2:
         else:
             await self.fetch_feature_list()
 
+        for i in range(1, self.elevator_number + 1):
+            self._elevator_registration(str(i))
+        
     async def _v2_refresh_session(self) -> None:
         """Refresh session for version 2."""
         url = "https://center.hdc-smart.com/v3/auth/login"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": self.entry.data[CONF_UUID],
-            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36"
-        }
+        headers = V2_SESSION_HEADER.copy()
+        headers["Authorization"] = self.entry.data[CONF_UUID]
+
         try:
             async with self.session.post(url=url, headers=headers, timeout=5) as response:
                 response_data = await response.json()
@@ -89,7 +87,6 @@ class BestinAPIv2:
                 LOGGER.debug(f"Session refreshed: {response_data}")
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
-                    title=self.entry.data[self.version_identifier],
                     data={**self.entry.data, self.version: response_data},
                 )
                 await asyncio.sleep(1)
@@ -99,12 +96,12 @@ class BestinAPIv2:
     async def elevator_call_request(self) -> None:
         """Elevator call request."""
         url = f"{self.entry.data[self.version]['url']}/v2/admin/elevators/home/apply"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": self.entry.data[CONF_UUID],
-            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36"
+        headers = V2_SESSION_HEADER.copy()
+        headers["Authorization"] = self.entry.data[CONF_UUID]
+        data = {
+            "address": self.entry.data[CONF_IP_ADDRESS],
+            "direction": "down"
         }
-        data = {"address": self.entry.data[CONF_IP_ADDRESS], "direction": "down"}
 
         try:
             async with self.session.post(url=url, headers=headers, json=data) as response:
@@ -114,8 +111,6 @@ class BestinAPIv2:
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.info(f"Just a central server elevator request successful")
-                    for count in range(1, self.elevator_count + 1):
-                        self.setup_device("elevator", 1, str(count), False)
                     self.hass.create_task(self.fetch_elevator_status())
                 else:
                     LOGGER.error(f"Only central server elevator request failed: {response_data}")
@@ -143,7 +138,7 @@ class BestinAPIv2:
         except Exception as ex:
             LOGGER.error(f"Fetch elevator status error occurred: {ex}")
 
-    async def handle_message_info(self, message) -> None:
+    async def handle_message_info(self, message: str) -> None:
         """Handle message info for elevator status monitoring."""
         data = json.loads(message)
         
@@ -153,35 +148,38 @@ class BestinAPIv2:
 
             self.elevator_data = {serial: move_info}
             self.elevator_data = dict(sorted(self.elevator_data.items()))
-            LOGGER.debug(f"Elevator data: {self.elevator_data}")
+            LOGGER.debug("Elevator data: %s", self.elevator_data)
+
             if len(self.elevator_data) >= 2:
                 for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
-                    floor = info["move_info"]["Floor"]
+                    floor = f"{info["move_info"]["Floor"]} 층"
                     move_dir = info["move_info"]["MoveDir"]
             
-                    self.setup_device("elevator", 1, f"floor_{str(idx)}", floor)
-                    self.setup_device("elevator", 1, f"direction_{str(idx)}", move_dir)
+                    self.set_device("elevator", 1, f"floor_{str(idx)}", floor)
+                    self.set_device("elevator", 1, f"direction_{str(idx)}", move_dir)
             else:
-                self.setup_device("elevator", 1, f"floor_1", move_info["Floor"])
-                self.setup_device("elevator", 1, f"direction_1", move_info["MoveDir"])
+                self.set_device("elevator", 1, f"floor_1", move_info["Floor"])
+                self.set_device("elevator", 1, f"direction_1", move_info["MoveDir"])
         else:
-            for count in range(1, self.elevator_count + 1):
-                self.setup_device("elevator", 1, f"floor_{str(count)}", "도착 층")
-                self.setup_device("elevator", 1, f"direction_{str(count)}", "도착")
+            for idx in range(1, self.elevator_number + 1):
+                self.set_device("elevator", 1, f"floor_{str(idx)}", "도착 층")
+                self.set_device("elevator", 1, f"direction_{str(idx)}", "도착")
+            
             self.elevator_arrived = True
 
-    async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str) -> None:
+    async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str | dict) -> None:
         """Request feature command."""
         url = f"{self.entry.data[self.version]['url']}/v2/api/features/{device_type}/{room_id}/apply"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": self.entry.data[CONF_UUID],
-            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36"
-        }
+        headers = V2_SESSION_HEADER.copy()
+        headers["access-token"] = self.entry.data[self.version]["access-token"]
         data = {"unit": unit, "state": value}
+        
         if device_type == "ventil":
             data.update({"unit": unit[:-1], "mode": "", "unit_mode": ""})
-
+        if device_type == "smartlight":
+            data.update({"unit": unit[-1], **value})
+            LOGGER.debug(data)
+        
         try:
             async with self.session.put(url=url, headers=headers, json=data) as response:
                 response.raise_for_status()
@@ -198,13 +196,11 @@ class BestinAPIv2:
         except Exception as ex:
             LOGGER.error(f"Error setting {device_type} in room {room_id}: {ex}")
 
-    async def fetch_feature_status(self, feature_name: str, room_id: str) -> None:
+    async def fetch_feature_status(self, feature_name: str, room_id: int) -> None:
         """Fetch feature status."""
         url = f"{self.entry.data[self.version]['url']}/v2/api/features/{feature_name}/{room_id}/apply"
-        headers = {
-            "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36",
-            "access-token": self.entry.data[self.version]["access-token"]
-        }
+        headers = V2_SESSION_HEADER.copy()
+        headers["access-token"] = self.entry.data[self.version]["access-token"]
 
         try:
             async with self.session.get(url=url, headers=headers) as response:
@@ -213,18 +209,39 @@ class BestinAPIv2:
                 result_status = self.result_after_request(response_data)
 
                 if response.status == 200 and result_status == "ok":
-                    for unit in response_data["units"]:
-                        unit_last = unit["unit"][-1]
-                        unit_state = unit["state"]
-                        if feature_name in ["light", "livinglight", "gas", "doorlock"]:
-                            self._parse_common_status(feature_name, room_id, unit_last, unit_state)
+                    LOGGER.debug(f"Fetched feature status: {response_data}")
+                    if feature_name == "smartlight":
+                        units = [
+                            unit for map in response_data["map"]
+                            if map["units"] is not None
+                            for unit in map["units"]
+                        ]
+                    else:
+                        units = response_data["units"]
+                    
+                    for unit in units:
+                        if feature_name == "smartlight":
+                            unit_last = unit["unit"]
+                            unit_state = {
+                                "is_on": True if unit["state"] == "on" else False,
+                                "brightness": int(unit["dimming"]) * 10 if unit["dimming"] != "null" else None,
+                                "color_temp": int(unit["color"]) * 10 if unit["color"] != "null" else None,
+                            }
+                        else:
+                            unit_last = unit["unit"][-1]
+                            unit_state = unit["state"]
+
+                        if feature_name in ["light", "smartlight", "livinglight", "gas", "doorlock"]:
+                            self._parse_common_status(
+                                feature_name, room_id, unit_last, unit_state
+                            )
                         if hasattr(self, name := f"_parse_{feature_name}_status"):
                             getattr(self, name)(room_id, unit_last, unit_state)
                 else:
                     LOGGER.error(f"Failed to get {feature_name} status: {response_data}")
         except Exception as ex:
             LOGGER.error(f"Error getting {feature_name} status: {ex}")
-
+    
     async def process_features(self, features: list) -> None:
         """Process features."""
         for feature in features:
@@ -248,10 +265,8 @@ class BestinAPIv2:
     async def fetch_feature_list(self) -> None:
         """Fetch feature list."""
         url = f"{self.entry.data[self.version]['url']}/v2/api/features/apply"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "access-token": self.entry.data[self.version]["access-token"]
-        }
+        headers = V2_SESSION_HEADER.copy()
+        headers["access-token"] = self.entry.data[self.version]["access-token"]
         
         try:
             async with self.session.get(url=url, headers=headers) as response:
@@ -269,42 +284,36 @@ class BestinAPIv2:
             LOGGER.error(f"Error fetching feature list: {ex}")
 
 
-class BestinAPI(BestinAPIv2):
+class BestinCenterAPI(CenterAPIv2):
     """Bestin HDC Smarthome API Class."""
 
     def __init__(
         self, 
         hass: HomeAssistant,
         entry: ConfigEntry,
-        entities: dict,
-        hub_id: str,
-        version: str,
-        version_identifier: str,
-        elevator_registration: bool,
-        async_add_device: Callable
+        entity_groups,
+        hub_id,
+        version,
+        version_identifier,
+        elevator_registration,
+        add_device_callback: Callable
     ) -> None:
-        """API initialization."""
+        """Initialize API and setup session."""
         super().__init__(hass, entry)
         self.hass = hass
         self.entry = entry
-        self.entities = entities
+        self.entity_groups = entity_groups
         self.hub_id = hub_id
         self.version = version
         self.version_identifier = version_identifier
         self.elevator_registration = elevator_registration
-        self.async_add_device = async_add_device
+        self.add_device_callback = add_device_callback
 
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        connector = aiohttp.TCPConnector()
         self.session = aiohttp.ClientSession(connector=connector)
-
+        
         self.tasks: list = []
         self.remove_callbacks: list = []
-        self.stop_event = asyncio.Event()
-
         self.devices: dict = {}
         self.last_update_time = datetime.now()
 
@@ -314,37 +323,32 @@ class BestinAPI(BestinAPIv2):
         return base64.urlsafe_b64encode(hash_object)[:8].decode("utf-8").upper()
 
     async def start(self) -> None:
-        """Start main loop with asyncio."""
-        self.stop_event.clear()
+        """Start main loop for status updates and session refresh."""
         self.tasks.append(asyncio.create_task(self.schedule_session_refresh()))
         await asyncio.sleep(1)
-
-        if self.elevator_registration:
-            LOGGER.debug("Setting up elevator")
-            self.setup_elevators()
-        v_key = getattr(self, f"_v{self.version[7:8]}_device_status")
+        
+        version_func = getattr(self, f"_{self.version[:-2]}_device_status")
         scan_interval = self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         interval = timedelta(minutes=scan_interval)
         
-        self.hass.create_task(v_key())
+        self.hass.create_task(version_func())
         self.remove_callbacks.append(
-            async_track_time_interval(self.hass, v_key, interval)
+            async_track_time_interval(self.hass, version_func, interval)
         )
 
     async def stop(self) -> None:
         """Stop main loop and cancel all tasks."""
-        self.stop_event.set()
         for task in self.tasks:
             task.cancel()
         for callback in self.remove_callbacks:
             callback()
 
-    async def _v1_device_status(self, args=None):
-        """Updates the v1 device status asynchronously."""
+    async def _version1_device_status(self, args=None):
+        """Update device status for version 1 asynchronously."""
         if args is not None:
             LOGGER.debug(f"Task execution started with argument: {args}")
             self.last_update_time = args
-
+        
         await asyncio.gather(
             *[self.get_light_status(i) for i in range(6)],
             *[self.get_electric_status(i) for i in range(1, 6)],
@@ -359,19 +363,15 @@ class BestinAPI(BestinAPIv2):
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
         params = {
             "login_ide": self.entry.data[CONF_USERNAME],
-            "login_pwd": self.entry.data[CONF_PASSWORD],
+            "login_pwd": self.entry.data[CONF_PASSWORD]
         }
         try:
             async with self.session.get(url=url, params=params, timeout=5) as response:
                 response_data = await response.json(content_type="text/html")
+                if response.status != 200 or "_fair" in response_data:
+                    LOGGER.error(f"Session refresh failed: {response_data.get('msg', 'Unknown error')}")
+                    return
 
-                if response.status != 200:
-                    LOGGER.error(f"Login failed: {response.status} {response_data}")
-                    return
-                if "_fair" in response_data:
-                    LOGGER.error(f"Session refresh failed: {response_data['msg']}")
-                    return
-            
                 cookies = response.cookies
                 new_cookie = {
                     "PHPSESSID": cookies.get("PHPSESSID").value if cookies.get("PHPSESSID") else None,
@@ -381,7 +381,6 @@ class BestinAPI(BestinAPIv2):
                 LOGGER.debug(f"Session refreshed: {response_data}, Cookie: {new_cookie}")
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
-                    title=self.entry.data[self.version_identifier],
                     data={**self.entry.data, self.version: new_cookie},
                 )
                 await asyncio.sleep(1)
@@ -389,9 +388,11 @@ class BestinAPI(BestinAPIv2):
             LOGGER.error(f"Exception during session refresh: {type(ex).__name__}: {ex}")
 
     @callback
-    async def on_command(self, unique_id: str, value: Any, **kwargs: Optional[dict]):
-        """Handle commands to the devices."""
-        parts = unique_id.split("-")[0].split("_")
+    async def enqueue_command(
+        self, device_id: str, value: Any, **kwargs: dict | None
+    ) -> None:
+        """Handle commands to devices based on type and room."""
+        parts = device_id.split("_")
         device_type = parts[1]
         room_id = int(parts[2])
         pos_id = 0
@@ -408,100 +409,79 @@ class BestinAPI(BestinAPIv2):
         if kwargs:
             sub_type, value = next(iter(kwargs.items()))
 
-        #LOGGER.debug(
-        #    "parsed values - device_type: %s, room_id: %s, pos_id: %s, sub_type: %s, value: %s",
-        #    device_type, room_id, pos_id, sub_type, value
-        #)
-        if self.version == "version1.0":
-            LOGGER.warning(f"For version 1, we don't support the command yet. If you can help, please register the issue")
+        if self.version == VERSION_1:
+            pass
         else:
             if device_type == "elevator":
                 await self.elevator_call_request()
             else:
                 unit_id = f"{sub_type}{pos_id or room_id}" if kwargs else f"{device_type}1"
-                #LOGGER.debug(f"Created unit_id: {unit_id}")
                 await self.request_feature_command(device_type, room_id, unit_id, value)
 
-    def convert_unique_id(self, unique_id: str) -> tuple[str, Optional[str]]:
-        """Convert device_id, sub_id from unique_id."""
-        parts = unique_id.split("-")[0].split("_")
-        if len(parts) > 3:
-            unit_id = "_".join(parts[3:])
-            device_id = "_".join(parts[1:3])
-        else:
-            unit_id = None
-            device_id = "_".join(parts[1:3])
-
-        return device_id, unit_id
-
-    def get_devices_from_domain(self, domain: str) -> list[dict]:
+    def get_devices_from_domain(self, domain: str) -> list:
         """Retrieve devices associated with a specific domain."""
-        entity_list = self.entities.get(domain, [])
+        entity_list = self.entity_groups.get(domain, set())
         return [self.devices.get(uid, {}) for uid in entity_list]
 
-    def initialize_device(self, device_id: str, unit_id: Optional[str], state: Any) -> dict:
-        """Initialize devices using a unique_id derived from device_id and unit_id."""
+    def initial_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
+        """Initialize a device and add it to the devices list."""
         device_type, device_room = device_id.split("_")
-        
-        base_unique_id = f"bestin_{device_id}"
-        unique_id = f"{base_unique_id}_{unit_id}" if unit_id else base_unique_id
-        full_unique_id = f"{unique_id}-{self.get_short_hash(self.hub_id)}"
-        
-        if device_type != "energy" and unit_id and not unit_id.isdigit():
-            letter_unit_id = ''.join(filter(str.isalpha, unit_id))
-            device_type = f"{device_type}:{letter_unit_id}"
-        
-        platform = DEVICE_CTR_PLATFORM_MAP.get(device_type)
-        if not platform:
-            raise ValueError(f"Unsupported platform type for device: {device_type}")
+    
+        did_suffix = f"_{sub_id}" if sub_id else ""
+        device_id = f"{BRAND_PREFIX}_{device_id}{did_suffix}"
+        if sub_id:
+            sub_id_parts = sub_id.split("_")
+            device_name = f"{device_type} {device_room} {' '.join(sub_id_parts)}".title()
+        else:
+            device_name = f"{device_type} {device_room}".title()
 
-        if full_unique_id not in self.devices:
+        if device_type not in MAIN_DEVICES:
+            uid_suffix = f"-{self.get_short_hash(self.hub_id)}"
+        else:
+            uid_suffix = ""
+        unique_id = f"{device_id}{uid_suffix}"
+
+        if device_id not in self.devices:
             device_info = DeviceInfo(
-                unique_id=full_unique_id,
                 device_type=device_type,
-                name=unique_id,
+                name=device_name,
                 room=device_room,
                 state=state,
-                sub_type=unit_id or "",
-                colon_id=device_type if ":" in device_type else ""
+                device_id=device_id,
             )
-            device = Device(
+            self.devices[device_id] = DeviceProfile(
+                enqueue_command=self.enqueue_command,
+                domain=CTR_DOMAIN_MAP[device_type],
+                unique_id=unique_id,
                 info=device_info,
-                domain=platform,
-                on_command=self.on_command,
-                callbacks=set()
             )
-            self.devices[full_unique_id] = device
+        return self.devices[device_id]
 
-        return self.devices[full_unique_id]
-
-    def setup_device(
-        self, device_type: str, device_number: int, unit_id: Optional[str], status: Any
+    def set_device(
+        self, device_type: str, device_number: int, unit_id: str | None, status: Any
     ) -> None:
-        """Set up device with specified state."""  
-        #LOGGER.debug(
-        #    f"Setting up {device_type} device number {device_number}, unit {unit_id}, status {status}"
-        #)
-
-        if device_type not in DEVICE_CTR_TYPE_MAP:
+        """Set up device with specified state."""
+        if device_type not in CTR_DOMAIN_MAP:
             raise ValueError(f"Unsupported device type: {device_type}")
-        
         device_id = f"{device_type}_{device_number}"
-        device = self.initialize_device(device_id, unit_id, status)
+        device = self.initial_device(device_id, unit_id, status)
 
-        if device_type != "energy" and unit_id and not unit_id.isdigit():
+        if unit_id and not unit_id.isdigit():
             letter_unit_id = ''.join(filter(str.isalpha, unit_id))
-            device_key = f"{device_type}:{letter_unit_id}"
-            _device_type = DEVICE_CTR_TYPE_MAP[device_key]
+            letter_device_type = f"{device_type}:{letter_unit_id}"
+            domain = CTR_DOMAIN_MAP[letter_device_type]
         else:
-            _device_type = DEVICE_CTR_TYPE_MAP[device_type]
-        self.async_add_device(_device_type, device)
+            domain = CTR_DOMAIN_MAP[device_type]
+        signal = CTR_SIGNAL_MAP[domain]
 
-        if device.info.state != status:
-            device.info.state = status
-            for callback in device.callbacks:
-                assert callable(callback), "Callback should be callable"
-                callback()
+        device_uid = device.unique_id
+        device_info = device.info
+        if device_uid not in self.entity_groups.get(domain):
+            self.add_device_callback(signal, device)
+
+        if device_info.state != status:
+            device_info.state = status
+            device.update_callbacks()
 
     def parse_xml_response(self, response: str) -> str:
         """Parse XML response."""
@@ -523,7 +503,7 @@ class BestinAPI(BestinAPIv2):
     async def _v1_fetch_status(
         self, url: str, params: dict, device_type: str, device_number: int
     ) -> None:
-        """fetch device status for version 1."""
+        """Fetch device status for version 1."""
         cookies = self.entry.data[self.version]
         try:
             async with self.session.get(url=url, cookies=cookies, params=params) as response:
@@ -538,58 +518,66 @@ class BestinAPI(BestinAPIv2):
                 except ET.ParseError as e:
                     LOGGER.error(f"XML parsing error for {device_type}: {e}")
                     return
-
+                
                 status_infos = root.findall(".//status_info")
                 if not status_infos:
                     LOGGER.warning(f"No status info found for {device_type}")
                     return
-
                 unit_statuses = [
                     (info.attrib["unit_num"], info.attrib["unit_status"])
                     for info in status_infos
                 ]
                 for unit_num, unit_status in unit_statuses:
-                    if device_type in ["light", "livinglight" "gas", "doorlock"]:
-                        self._parse_common_status(device_type, device_number, unit_num[-1], unit_status)
+                    if device_type in ["light", "livinglight", "gas", "doorlock"]:
+                        self._parse_common_status(
+                            device_type, device_number, unit_num[-1], unit_status
+                        )
                     if hasattr(self, name := f"_parse_{device_type}_status"):
                         getattr(self, name)(device_number, unit_num[-1], unit_status)
         except Exception as ex:
             LOGGER.error(f"Error getting status for {device_type}: {ex}")
 
+    def _elevator_registration(self, id: str) -> None:
+        """Register an elevator with the given ID."""
+        self.set_device("elevator", 1, id, False)
+        self.set_device("elevator", 1, f"floor_{id}", "대기 층")
+        self.set_device("elevator", 1, f"direction_{id}", "대기")
+    
     def _parse_common_status(
-        self, device_type: str, device_number: int, unit_num: str, unit_status: str
+        self, device_type: str, device_number: int, unit_num: str, unit_status: str | dict
     ) -> None:
-        """Parse common status for devices with on/off state."""
-        status_value = unit_status in ["on", "open"]
-        self.setup_device(device_type, device_number, unit_num, status_value)
+        if isinstance(unit_status, dict):
+            status_value = unit_status
+        else:
+            status_value = unit_status in ["on", "open"]
+        self.set_device(device_type, device_number, unit_num, status_value)
 
     def _parse_electric_status(
         self, device_number: int, unit_num: str, unit_status: str
     ) -> None:
-        """Parse the unit status for the electric."""
         status_parts = unit_status.split("/")
         for status_key in status_parts:
             is_cutoff = status_key in ["set", "unset"]
             conv_unit_num = f"cutoff_{unit_num}" if is_cutoff else unit_num
             status_value = status_key in ["set", "on"]
-            self.setup_device("electric", device_number, conv_unit_num, status_value)
+            self.set_device("electric", device_number, conv_unit_num, status_value)
 
     def _parse_thermostat_status(
         self, device_number: int, unit_num: str, unit_status: str
     ) -> None:
-        """Parse the unit status for the thermostat."""
+        """Parse thermostat status."""
         status_parts = unit_status.split("/")
         status_value = {
             "hvac_mode": HVACMode.HEAT if status_parts[0] == "on" else HVACMode.OFF,
             "target_temperature": float(status_parts[1]),
             "current_temperature": float(status_parts[2])
         }
-        self.setup_device("thermostat", unit_num, None, status_value)
+        self.set_device("thermostat", unit_num, None, status_value)
 
     def _parse_ventil_status(
         self, device_number: int, unit_num: str, unit_status: str
     ) -> None:
-        """Parse the unit status for the fan."""
+        """Parse fan status."""
         is_off = unit_status == "off"
         speed_list = [SPEED_STR_LOW, SPEED_STR_MEDIUM, SPEED_STR_HIGH]
         status_value = {
@@ -598,18 +586,22 @@ class BestinAPI(BestinAPIv2):
             "speed_list": speed_list,
             "preset_mode": None,
         }
-        self.setup_device("ventil", device_number, None, status_value)
+        self.set_device("ventil", device_number, None, status_value)
 
     async def get_light_status(self, device_number: int) -> None:
         """Get light/livinglight status."""
         params = {
-            "req_name": "remote_access_light" if device_number != 0 else "remote_access_livinglight",
+            "req_name": "remote_access_light" 
+            if device_number != 0 else "remote_access_livinglight", 
             "req_action": "status"
         }
         if device_number != 0:
             params["req_dev_num"] = device_number
+        
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, params["req_name"].split("_")[2], device_number)
+        await self._v1_fetch_status(
+            url, params, params["req_name"].split("_")[2], device_number
+        )
 
     async def get_electric_status(self, device_number: int) -> None:
         """Get electric status."""
@@ -622,7 +614,7 @@ class BestinAPI(BestinAPIv2):
         await self._v1_fetch_status(url, params, "electric", device_number)
 
     async def get_temper_status(self, device_number: int) -> None:
-        """Get temper status."""
+        """Get temperature status."""
         params = {
             "req_name": "remote_access_temper",
             "req_action": "status",
@@ -631,38 +623,38 @@ class BestinAPI(BestinAPIv2):
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
         await self._v1_fetch_status(url, params, "temper", device_number)
 
-    async def get_gas_status(self, device_number: int=1) -> None:
+    async def get_gas_status(self, device_number: int = 1) -> None:
         """Get gas status."""
         params = {
             "req_name": "remote_access_gas",
-            "req_action": "status",
+            "req_action": "status"
         }
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
         await self._v1_fetch_status(url, params, "gas", device_number)
 
-    async def get_ventil_status(self, device_number: int=1) -> None:
+    async def get_ventil_status(self, device_number: int = 1) -> None:
         """Get fan status."""
         params = {
             "req_name": "remote_access_ventil",
-            "req_action": "status",
+            "req_action": "status"
         }
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
         await self._v1_fetch_status(url, params, "ventil", device_number)
 
-    async def get_doorlock_status(self, device_number: int=1) -> None:
-        """Get doorlock status."""
+    async def get_doorlock_status(self, device_number: int = 1) -> None:
+        """Get door lock status."""
         params = {
             "req_name": "remote_access_doorlock",
-            "req_action": "status",
+            "req_action": "status"
         }
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
         await self._v1_fetch_status(url, params, "doorlock", device_number)
 
     async def schedule_session_refresh(self) -> None:
-        """Schedule for periodic session refresh.""" 
+        """Schedule periodic session refresh."""
         while True:
-            if self.version == "version1.0":
+            if self.version == VERSION_1:
                 await self._v1_refresh_session()
             else:
                 await self._v2_refresh_session()
-            await asyncio.sleep(60 * 60)
+            await asyncio.sleep(60 * 55)

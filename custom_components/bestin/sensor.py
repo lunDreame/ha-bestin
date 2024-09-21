@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import DOMAIN
+from homeassistant.components.sensor import DOMAIN as DOMAIN_SENSOR
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -15,12 +15,12 @@ from .const import (
     ELEMENT_UNIT,
 )
 from .device import BestinDevice
-from .hub import load_hub
+from .hub import BestinHub
 
 
 def extract_and_transform(identifier: str) -> str:
     if "energy_" in identifier:
-        extracted_segment = identifier.split("energy_")[1].split("-")[0]
+        extracted_segment = identifier.split("energy_")[1]
     else:
         extracted_segment = ':'.join([identifier.split("_")[1], identifier.split("_")[3]])
 
@@ -34,24 +34,24 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup sensor platform."""
-    hub = load_hub(hass, entry)
-    hub.entities[DOMAIN] = set()
+    hub: BestinHub = BestinHub.get_hub(hass, entry)
+    hub.entity_groups[DOMAIN_SENSOR] = set()
 
     @callback
     def async_add_sensor(devices=None):
         if devices is None:
-            devices = hub.api.get_devices_from_domain(DOMAIN)
+            devices = hub.api.get_devices_from_domain(DOMAIN_SENSOR)
 
         entities = [
             BestinSensor(device, hub) 
             for device in devices 
-            if device.info.unique_id not in hub.entities[DOMAIN]
+            if device.unique_id not in hub.entity_groups[DOMAIN_SENSOR]
         ]
 
         if entities:
             async_add_entities(entities)
 
-    hub.listeners.append(
+    entry.async_on_unload(
         async_dispatcher_connect(
             hass, hub.async_signal_new_device(NEW_SENSOR), async_add_sensor
         )
@@ -61,14 +61,14 @@ async def async_setup_entry(
 
 class BestinSensor(BestinDevice):
     """Defined the Sensor."""
-    TYPE = DOMAIN
+    TYPE = DOMAIN_SENSOR
 
     def __init__(self, device, hub) -> None:
         """Initialize the sensor."""
         super().__init__(device, hub)
-        self._attr_id = extract_and_transform(self.unique_id)
+        self._attr_id = extract_and_transform(self._device_info.device_id)
         self._is_general = hub.wp_version == "General"
-        
+    
     @property
     def state(self):
         """Return the state of the sensor."""
@@ -76,10 +76,10 @@ class BestinSensor(BestinDevice):
             raise ValueError(f"Invalid attribute ID: {self._attr_id}")
 
         factor = ELEMENT_VALUE_CONVERSION[self._attr_id]
-
         if isinstance(factor, list) and len(factor) == 2:
             factor = factor[0] if self._is_general else factor[1]
-        return factor(self._device.info.state)
+        
+        return factor(self._device_info.state)
     
     @property
     def device_class(self):
