@@ -17,11 +17,14 @@ class BestinBase:
     def __init__(self, device, hub):
         """Set up device and update callbacks."""
         self._device = device
+        self._device_info = device.info
         self.hub = hub
     
     async def enqueue_command(self, data: Any = None, **kwargs):
         """Send commands to the device."""
-        await self._device.enqueue_command(self._device.device_id, data, **kwargs)
+        await self._device.enqueue_command(
+            self._device_info.device_id, data, **kwargs
+        )
 
     @property
     def unique_id(self) -> str:
@@ -40,9 +43,11 @@ class BestinBase:
             "sw_version": self.hub.sw_version,
             "via_device": (DOMAIN, self.hub.hub_id),
         }
-        if (device_type := self._device.device_type) not in MAIN_DEVICES:
+        if (device_type := self._device_info.device_type) not in MAIN_DEVICES:
             formatted_device_type = formatted_name(device_type)
-            device_info["identifiers"] = {(DOMAIN, f"{self.hub.wp_version}_{formatted_device_type}")}
+            device_info["identifiers"] = {
+                (DOMAIN, f"{self.hub.wp_version}_{formatted_device_type}")
+            }
             device_info["name"] = f"{self.hub.name} {formatted_device_type}"
         
         return DeviceInfo(**device_info)
@@ -57,7 +62,7 @@ class BestinDevice(BestinBase, Entity):
         """Set up device and update callbacks."""
         super().__init__(device, hub)
         self.hub.entity_groups[self.TYPE].add(self.unique_id)
-        self._attr_name = self._device.name
+        self._attr_name = self._device_info.name
         self._attr_has_entity_name = True
 
     @property
@@ -68,7 +73,7 @@ class BestinDevice(BestinBase, Entity):
     async def async_added_to_hass(self):
         """Subscribe to device events."""
         self._device.add_callback(self.async_update_callback)
-        self.hub.entity_to_id[self.entity_id] = self._device.device_id
+        self.hub.entity_to_id[self.entity_id] = self._device_info.device_id
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -102,10 +107,10 @@ class BestinDevice(BestinBase, Entity):
         """Return the state attributes of the sensor."""
         attributes = {
             "unique_id": self.unique_id,
-            "device_type": self._device.device_type,
-            "device_room": self._device.room,
+            "device_type": self._device_info.device_type,
+            "device_room": self._device_info.room,
         }
-        if self.should_poll and not self._device.device_type.startswith("elevator"):
+        if self.should_poll and not attributes["device_type"].startswith("elevator"):
             attributes["last_update_time"] = self.hub.api.last_update_time
         
         return attributes

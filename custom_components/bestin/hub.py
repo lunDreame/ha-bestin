@@ -127,7 +127,7 @@ class ConnectionManager:
         try:
             self.writer.write(packet)
             await self.writer.drain()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.12)
         except Exception as e:
             LOGGER.error(f"Failed to send packet data: {e}")
             await self.reconnect()
@@ -367,9 +367,10 @@ class BestinHub:
         """Add device callback if not already registered."""
         domain = device.domain
         unique_id = device.unique_id
+        device_info = device.info
         
         if (unique_id in self.entity_groups.get(domain, set())
-            or device.device_id in self.entity_to_id
+            or device_info.device_id in self.entity_to_id
         ):
             return
         
@@ -422,7 +423,6 @@ class BestinHub:
 
             self.hass.config_entries.async_update_entry(
                 entry=self.entry,
-                title=self.hub_id,
                 data={**self.entry.data, "gateway_mode": self.gateway_mode},
             )
             self.api = BestinController(

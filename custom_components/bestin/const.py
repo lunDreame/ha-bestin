@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -170,27 +170,32 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 
 @dataclass
 class DeviceInfo:
-    """Represents a device with callbacks and update functionalities."""
+    """Set device information."""
     device_type: str
     name: str
     room: str
     state: Any
     device_id: str
-    unique_id: str
-    domain: str
-    enqueue_command: Callable
-    callbacks: Set[Callable] = field(default_factory=set)
 
-    def add_callback(self, callback: Callable):
-        """Add a callback to the set of callbacks."""
+@dataclass
+class DeviceProfile:
+    """Set the device profile."""
+    enqueue_command: Callable[..., None]
+    domain: str
+    unique_id: str
+    info: DeviceInfo
+    callbacks: Set[Callable[..., None]] = field(default_factory=set)
+
+    def add_callback(self, callback: Callable[..., None]) -> None:
+        """Add a callback.."""
         self.callbacks.add(callback)
 
-    def remove_callback(self, callback: Callable):
-        """Remove a callback from the set of callbacks, if it exists."""
+    def remove_callback(self, callback: Callable[..., None]) -> None:
+        """Remove the callback."""
         self.callbacks.discard(callback)
     
-    def update_callback(self):
-        """Trigger all registered callbacks."""
+    def update_callbacks(self) -> None:
+        """Updates the registered callback."""
         for callback in self.callbacks:
             assert callable(callback), "Callback should be callable"
             callback()

@@ -51,14 +51,16 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub: BestinHub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._is_gas = device.device_type == "gas" # center
-        self._is_cutoff = device.device_type == "electric:cutoff" # center
+        # center
+        self._is_gas = self._device_info.device_type == "gas"
+        self._is_cutoff = self._device_info.device_type == "electric:cutoff"
+
         self._version_exists = getattr(hub.api, "version", False)
 
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        return self._device.state
+        return self._device_info.state
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""

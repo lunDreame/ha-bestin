@@ -66,7 +66,7 @@ class BestinSensor(BestinDevice):
     def __init__(self, device, hub) -> None:
         """Initialize the sensor."""
         super().__init__(device, hub)
-        self._attr_id = extract_and_transform(self._device.device_id)
+        self._attr_id = extract_and_transform(self._device_info.device_id)
         self._is_general = hub.wp_version == "General"
     
     @property
@@ -79,7 +79,7 @@ class BestinSensor(BestinDevice):
         if isinstance(factor, list) and len(factor) == 2:
             factor = factor[0] if self._is_general else factor[1]
         
-        return factor(self._device.state)
+        return factor(self._device_info.state)
     
     @property
     def device_class(self):

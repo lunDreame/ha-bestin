@@ -77,7 +77,7 @@ class BestinClimate(BestinDevice, ClimateEntity):
 
         Need to be one of HVAC_MODE_*.
         """
-        return self._device.state["hvac_mode"]
+        return self._device_info.state["hvac_mode"]
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -122,12 +122,12 @@ class BestinClimate(BestinDevice, ClimateEntity):
     @property
     def current_temperature(self) -> float:
         """Return the current temperature."""
-        return self._device.state["current_temperature"]
+        return self._device_info.state["current_temperature"]
 
     @property
     def target_temperature(self) -> float:
         """Return the target temperature."""
-        return self._device.state["target_temperature"]
+        return self._device_info.state["target_temperature"]
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""

@@ -30,8 +30,10 @@ from .const import (
     SPEED_STR_LOW,
     SPEED_STR_MEDIUM,
     SPEED_STR_HIGH,
+    MAIN_DEVICES,
     CTR_SIGNAL_MAP,
     CTR_DOMAIN_MAP,
+    DeviceProfile,
     DeviceInfo,
 )
 
@@ -85,7 +87,6 @@ class CenterAPIv2:
                 LOGGER.debug(f"Session refreshed: {response_data}")
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
-                    title=self.entry.data[self.version_identifier],
                     data={**self.entry.data, self.version: response_data},
                 )
                 await asyncio.sleep(1)
@@ -380,7 +381,6 @@ class BestinCenterAPI(CenterAPIv2):
                 LOGGER.debug(f"Session refreshed: {response_data}, Cookie: {new_cookie}")
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
-                    title=self.entry.data[self.version_identifier],
                     data={**self.entry.data, self.version: new_cookie},
                 )
                 await asyncio.sleep(1)
@@ -423,32 +423,39 @@ class BestinCenterAPI(CenterAPIv2):
         entity_list = self.entity_groups.get(domain, set())
         return [self.devices.get(uid, {}) for uid in entity_list]
 
-    def init_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
+    def initial_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
         """Initialize a device and add it to the devices list."""
         device_type, device_room = device_id.split("_")
     
-        suffix = f"_{sub_id}" if sub_id else ""
-        device_id = f"{BRAND_PREFIX}_{device_id}{suffix}"
+        did_suffix = f"_{sub_id}" if sub_id else ""
+        device_id = f"{BRAND_PREFIX}_{device_id}{did_suffix}"
         if sub_id:
             sub_id_parts = sub_id.split("_")
-            device_name = f"{device_type.title()} {device_room} {' '.join(sub_id_parts)}"
+            device_name = f"{device_type} {device_room} {' '.join(sub_id_parts)}".title()
         else:
-            device_name = f"{device_type.title()} {device_room}"
-        unique_id = f"{device_id}-{self.get_short_hash(self.hub_id)}"
+            device_name = f"{device_type} {device_room}".title()
 
-        if unique_id not in self.devices:
-            self.devices[unique_id] = DeviceInfo(
+        if device_type not in MAIN_DEVICES:
+            uid_suffix = f"-{self.get_short_hash(self.hub_id)}"
+        else:
+            uid_suffix = ""
+        unique_id = f"{device_id}{uid_suffix}"
+
+        if device_id not in self.devices:
+            device_info = DeviceInfo(
                 device_type=device_type,
                 name=device_name,
                 room=device_room,
                 state=state,
                 device_id=device_id,
-                unique_id=unique_id,
-                domain=CTR_DOMAIN_MAP[device_type],
-                enqueue_command=self.enqueue_command,
-                callbacks=set()
             )
-        return self.devices[unique_id]
+            self.devices[device_id] = DeviceProfile(
+                enqueue_command=self.enqueue_command,
+                domain=CTR_DOMAIN_MAP[device_type],
+                unique_id=unique_id,
+                info=device_info,
+            )
+        return self.devices[device_id]
 
     def set_device(
         self, device_type: str, device_number: int, unit_id: str | None, status: Any
@@ -457,7 +464,7 @@ class BestinCenterAPI(CenterAPIv2):
         if device_type not in CTR_DOMAIN_MAP:
             raise ValueError(f"Unsupported device type: {device_type}")
         device_id = f"{device_type}_{device_number}"
-        device = self.init_device(device_id, unit_id, status)
+        device = self.initial_device(device_id, unit_id, status)
 
         if unit_id and not unit_id.isdigit():
             letter_unit_id = ''.join(filter(str.isalpha, unit_id))
@@ -466,11 +473,15 @@ class BestinCenterAPI(CenterAPIv2):
         else:
             domain = CTR_DOMAIN_MAP[device_type]
         signal = CTR_SIGNAL_MAP[domain]
-        self.add_device_callback(signal, device)
 
-        if device.state != status:
-            device.state = status
-            device.update_callback()
+        device_uid = device.unique_id
+        device_info = device.info
+        if device_uid not in self.entity_groups.get(domain):
+            self.add_device_callback(signal, device)
+
+        if device_info.state != status:
+            device_info.state = status
+            device.update_callbacks()
 
     def parse_xml_response(self, response: str) -> str:
         """Parse XML response."""
@@ -646,4 +657,4 @@ class BestinCenterAPI(CenterAPIv2):
                 await self._v1_refresh_session()
             else:
                 await self._v2_refresh_session()
-            await asyncio.sleep(60 * 60)
+            await asyncio.sleep(60 * 55)

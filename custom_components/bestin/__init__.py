@@ -18,6 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.debug(f"entry_data: {entry.data}, unique_id: {entry.unique_id}")
 
     if "version" not in entry.data:
+        # Serial connect
         if not await hub.connect():
             LOGGER.warning(f"Hub connection failed: {hub.hub_id}")
             await hub.async_close()
