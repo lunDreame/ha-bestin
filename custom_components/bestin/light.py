@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.color import value_to_brightness
 from homeassistant.util.percentage import percentage_to_ranged_value
 
-from .const import NEW_LIGHT, LOGGER
+from .const import NEW_LIGHT
 from .device import BestinDevice
 from .hub import BestinHub
 
