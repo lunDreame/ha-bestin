@@ -65,7 +65,8 @@ BESTIN 월패드 1.0/2.0 사용자들을 위한 통합
 - 1.2.0 버전 이후부터 IPARK 스마트홈 연동을 지원합니다.
 
 ## 디버깅
-문제 파악을 위해 아래 코드를 `configuration.yaml` 파일에 추가 후 HomeAssistant를 재시작해 주세요. BESTIN 구성요소의 디버그 로깅을 활성화하고 생성된 파일을 이슈 등록 시 첨부해 주세요. 개인정보가 우려되는 경우 lundreame34@gmail.com으로 연락 부탁드립니다.
+문제 파악을 위해 아래 코드를 `configuration.yaml` 파일에 추가 후 HomeAssistant를 재시작해 주세요.
+BESTIN 구성요소의 디버그 로깅을 활성화하고 생성된 파일을 이슈 등록 시 첨부해 주세요. 개인정보가 우려되는 경우 [이메일](lundreame34@gmail.com)로 연락 부탁드립니다.
 
 ```yaml
 logger:
