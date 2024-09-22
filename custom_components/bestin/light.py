@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.color import value_to_brightness
 from homeassistant.util.percentage import percentage_to_ranged_value
 
-from .const import NEW_LIGHT
+from .const import NEW_LIGHT, LOGGER
 from .device import BestinDevice
 from .hub import BestinHub
 
@@ -73,7 +73,8 @@ class BestinLight(BestinDevice, LightEntity):
         
         self._max_color_temp_kelvin = COLOR_TEMP_SCALE[1]  # 5700K
         self._min_color_temp_kelvin = COLOR_TEMP_SCALE[0]  # 3000K
-
+        
+        self._is_smartlight = self._device_info.device_type == "smartlight"  # center
         self._version_exists = getattr(hub.api, "version", False)
 
     @property
@@ -116,11 +117,12 @@ class BestinLight(BestinDevice, LightEntity):
         reverse: bool = False
     ) -> int:
         """Convert the brightness value."""
+        brightness_step = 10 if self._is_smartlight else 100
         if reverse:
-            result = (brightness - 1) * (100 - 1) / (255 - 1) + 1
-            return round(result / 10) * 10
+            result = (brightness - 1) * (brightness_step - 1) / (255 - 1) + 1
+            return round(result)
         else:
-            return int((brightness - 1) * (255 - 1) / (100 - 1) + 1)
+            return int((brightness - 1) * (255 - 1) / (brightness_step - 1) + 1)
     
     def convert_color_temp(
         self,
@@ -128,13 +130,14 @@ class BestinLight(BestinDevice, LightEntity):
         reverse: bool = False
     ) -> int:
         """Convert the color temperature value."""
+        color_temp_step = 1 if self._is_smartlight else 10  # 1: center / 10: serial
         if reverse:
             for i, temp in enumerate(COLOR_TEMP_LEVELS):
                 if color_temp < temp:
-                    return i * 10
-            return 100
+                    return i * color_temp_step
+            return 10 * color_temp_step
         else:
-            return COLOR_TEMP_LEVELS[(color_temp // 10) - 1]
+            return COLOR_TEMP_LEVELS[(color_temp // color_temp_step) - 1]
 
     def set_light_command(
         self,

@@ -224,8 +224,8 @@ class CenterAPIv2:
                             unit_last = unit["unit"]
                             unit_state = {
                                 "is_on": True if unit["state"] == "on" else False,
-                                "brightness": int(unit["dimming"]) * 10 if unit["dimming"] != "null" else None,
-                                "color_temp": int(unit["color"]) * 10 if unit["color"] != "null" else None,
+                                "brightness": int(unit["dimming"]) if unit["dimming"] != "null" else None,
+                                "color_temp": int(unit["color"]) if unit["color"] != "null" else None,
                             }
                         else:
                             unit_last = unit["unit"][-1]
