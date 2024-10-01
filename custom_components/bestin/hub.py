@@ -191,7 +191,7 @@ class ConnectionManager:
                     packet_length = packet[2]
                 
                 if packet_length <= 0:
-                    LOGGER.error(f"Invalid packet length in packet. {packet.hex()}")
+                    #LOGGER.error(f"Invalid packet length in packet. {packet.hex()}")
                     return b''
 
                 packet += await recv_exactly(packet_length - len(packet))

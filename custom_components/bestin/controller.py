@@ -300,6 +300,10 @@ class BestinController:
         else:
             device_name = f"{device_type} {device_room}".title()
 
+        if device_type != "energy" and sub_id and not sub_id.isdigit():
+            letter_sid = ''.join(filter(str.isalpha, sub_id))
+            device_type = f"{device_type}:{letter_sid}"
+        
         if device_type not in MAIN_DEVICES:
             uid_suffix = f"-{self.hub_id}"
         else:
@@ -339,11 +343,11 @@ class BestinController:
                 domain = DOMAIN_MAP[letter_device_type]
             else:
                 domain = DOMAIN_MAP[device_type]
-            signal = SIGNAL_MAP[domain]
             
             device_uid = device.unique_id
             device_info = device.info
             if device_uid not in self.entity_groups.get(domain, set()):
+                signal = SIGNAL_MAP[domain]
                 self.add_device_callback(signal, device)
 
             if device_info.state != sub_state:

@@ -100,7 +100,10 @@ class BestinFan(BestinDevice, FanEntity):
             await self.enqueue_command("off" if self._version_exists else False)
         else:
             speed = percentage_to_ordered_list_item(self._speed_list, percentage)
-            await self.enqueue_command(speed=speed)
+            if speed == "low" and self.is_on is False:
+                await self.enqueue_command("on")
+            else:
+                await self.enqueue_command(speed=speed)
 
     @property
     def preset_mode(self) -> str:
@@ -126,7 +129,7 @@ class BestinFan(BestinDevice, FanEntity):
         **kwargs: Any,
     ) -> None:
         """Turn on fan."""
-        await self.enqueue_command("low" if self._version_exists else True)
+        await self.enqueue_command("on" if self._version_exists else True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off fan."""

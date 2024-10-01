@@ -435,6 +435,10 @@ class BestinCenterAPI(CenterAPIv2):
         else:
             device_name = f"{device_type} {device_room}".title()
 
+        if device_type != "energy" and sub_id and not sub_id.isdigit():
+            letter_sid = ''.join(filter(str.isalpha, sub_id))
+            device_type = f"{device_type}:{letter_sid}"
+        
         if device_type not in MAIN_DEVICES:
             uid_suffix = f"-{self.get_short_hash(self.hub_id)}"
         else:
@@ -472,11 +476,11 @@ class BestinCenterAPI(CenterAPIv2):
             domain = CTR_DOMAIN_MAP[letter_device_type]
         else:
             domain = CTR_DOMAIN_MAP[device_type]
-        signal = CTR_SIGNAL_MAP[domain]
 
         device_uid = device.unique_id
         device_info = device.info
-        if device_uid not in self.entity_groups.get(domain):
+        if device_uid not in self.entity_groups.get(domain, set()):
+            signal = CTR_SIGNAL_MAP[domain]
             self.add_device_callback(signal, device)
 
         if device_info.state != status:
