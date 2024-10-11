@@ -17,6 +17,12 @@ from .const import (
 from .device import BestinDevice
 from .hub import BestinHub
 
+DEVICE_ICON_MAP = {
+    "outlet:consumption": "mdi:lightning-bolt",
+    "elevator:direction": "mdi:elevator",
+    "elevator:floor": "mdi:elevator",
+}
+
 
 def extract_and_transform(identifier: str) -> str:
     if "energy_" in identifier:
@@ -66,9 +72,9 @@ class BestinSensor(BestinDevice):
     def __init__(self, device, hub) -> None:
         """Initialize the sensor."""
         super().__init__(device, hub)
+        self._attr_icon = DEVICE_ICON_MAP.get(self._device_info.device_type)
         self._attr_id = extract_and_transform(self._device_info.device_id)
-        self._is_general = hub.wp_version == "General"
-    
+
     @property
     def state(self):
         """Return the state of the sensor."""
@@ -77,7 +83,7 @@ class BestinSensor(BestinDevice):
 
         factor = ELEMENT_VALUE_CONVERSION[self._attr_id]
         if isinstance(factor, list) and len(factor) == 2:
-            factor = factor[0] if self._is_general else factor[1]
+            factor = factor[0] if self.hub.wp_version == "General" else factor[1]
         
         return factor(self._device_info.state)
     
@@ -95,6 +101,5 @@ class BestinSensor(BestinDevice):
     def state_class(self):
         """Type of this sensor state."""
         return (
-            # measurement: consumption, realtime
             "total_increasing" if "total" in self._attr_id else "measurement"
         )

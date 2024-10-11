@@ -46,30 +46,22 @@
             "single_instance_allowed": "단일 구성만 가능합니다."
         },
         "error": {
-            "error_login": "로그인 실패 {err}",
-            "error_network": "네트워크 오류",
-            "unknown": "알 수 없는 오류"
+            "connect_failed": "연결에 실패하였습니다.",
+            "login_failed": "로그인에 실패하였습니다. {err}",
+            "network_error": "네크워크 애러가 발생하였습니다.",
+            "unknown": "알 수 없는 오류가 발생하였습니다."
         }
     },
     "options": {
         "step": {
             "init": {
                 "title": "사용자 옵션 조정",
-                "description": "로컬 통신에서는 최대 전송 수와 패킷 뷰어를, 스마트홈 연동에서는 스캔 간격을 조정하세요.",
                 "data": {
-                    "max_transmission": "최대 전송 수",
+                    "max_send_retry": "최대 전송 재시도",
                     "packet_viewer": "패킷 뷰어",
                     "scan_interval": "스캔 간격 (분)"
                 }
             }
-        },
-        "abort": {
-            "single_instance_allowed": "단일 구성만 가능합니다."
-        },
-        "error": {
-            "error_login": "로그인 실패 {err}",
-            "error_network": "네트워크 오류",
-            "unknown": "알 수 없는 오류"
         }
     }
 }

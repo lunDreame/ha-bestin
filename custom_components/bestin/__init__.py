@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry
+import asyncio
+
+from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, LOGGER, PLATFORMS
+from .const import DOMAIN, LOGGER, PLATFORMS, CONF_SESSION
 from .hub import BestinHub
 
 
@@ -15,20 +17,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hub = BestinHub(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
 
-    LOGGER.debug(f"entry_data: {entry.data}, unique_id: {entry.unique_id}")
-
-    if "version" not in entry.data:
-        # Serial connect
-        if not await hub.connect():
-            LOGGER.warning(f"Hub connection failed: {hub.hub_id}")
+    if CONF_SESSION not in entry.data:
+        try:
+            await asyncio.wait_for(hub.connect(), timeout=5)
+        except asyncio.TimeoutError as ex:
             await hub.async_close()
-            
             hass.data[DOMAIN].pop(entry.entry_id)
-            return False
+            raise ConfigEntryNotReady(f"Connection to {hub.hub_id} timed out.") from ex
 
-        LOGGER.debug(f"Hub connected: {hub.hub_id}")
+        LOGGER.info("Start serial initialization.")
         await hub.async_initialize_serial()
     else:
+        LOGGER.info("Start center initialization.")
         await hub.async_initialize_center()
     
     entry.async_on_unload(
@@ -40,9 +40,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     return True
 
+
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the BESTIN integration."""

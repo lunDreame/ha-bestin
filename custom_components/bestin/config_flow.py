@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 
+import asyncio
 import voluptuous as vol
 
 from homeassistant.core import callback
@@ -27,12 +28,17 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.selector import selector
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
+from .hub import BestinHub
 from .const import (
     DOMAIN,
     LOGGER,
+    CONF_VERSION,
+    CONF_VERSION_1,
+    CONF_VERSION_2,
+    CONF_SESSION,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_MAX_TRANSMISSION,
+    DEFAULT_MAX_SEND_RETRY,
     DEFAULT_PACKET_VIEWER,
 )
 
@@ -51,7 +57,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
     
     @staticmethod
     def int_between(min_int, max_int):
-        """Return an integer between "min_int" and "max_int"."""
+        """Return an integer between 'min_int' and 'max_int'."""
         return vol.All(vol.Coerce(int), vol.Range(min=min_int, max=max_int))
 
     async def async_step_user(
@@ -65,16 +71,23 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         self, 
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the local communication."""
+        """Handle local communication setup."""
         errors = {}
 
         if user_input is not None:
-            self.data.update(user_input)
-            self.config_identifier = CONF_HOST
-
-            await self.async_set_unique_id(user_input[CONF_HOST])
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(title=user_input[CONF_HOST], data=self.data)
+            host = user_input[CONF_HOST]
+            port = user_input[CONF_PORT]
+            
+            try:
+                hub = BestinHub(self.hass, entry=None)
+                await asyncio.wait_for(hub.connect(host, port), timeout=5)
+            except asyncio.TimeoutError as ex:
+                LOGGER.error(f"Connection to {host}:{port} failed due to timeout: {ex}")
+                errors["base"] = "connect_failed"
+            else:            
+                await self.async_set_unique_id(user_input[CONF_HOST])
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(title=user_input[CONF_HOST], data=user_input)
         
         return self.async_show_form(
             step_id="local",
@@ -85,94 +98,88 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors
         )
 
-    async def _v1_server_login(self, session) -> Any:
-        """Login to HDC v1 server."""
-        url = f"http://{self.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
+    async def _v1_server_login(self, user_input, session) -> Any:
+        """Login to the I'Park Smart Home server (v1) and retrieve session cookies."""
+        url = f"http://{user_input[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
         params = {
-            "login_ide": self.data[CONF_USERNAME],
-            "login_pwd": self.data[CONF_PASSWORD],
+            "login_ide": user_input[CONF_USERNAME],
+            "login_pwd": user_input[CONF_PASSWORD],
         }
 
         try:
             async with session.get(url=url, params=params, timeout=5) as response:
-                response_data = await response.json(content_type="text/html")
+                resp = await response.json(content_type="text/html")
 
-                if response.status == 200 and "_fair" not in response_data["ret"]:
+                if response.status == 200 and "_fair" not in resp["ret"]:
                     cookies = response.cookies
                     new_cookie = {
                         "PHPSESSID": cookies.get("PHPSESSID").value if cookies.get("PHPSESSID") else None,
                         "user_id": cookies.get("user_id").value if cookies.get("user_id") else None,
                         "user_name": cookies.get("user_name").value if cookies.get("user_name") else None,
                     }
-                    LOGGER.info(f"V1 Login successful. Response data: {response_data}. Cookies: {new_cookie}")
+                    LOGGER.info(f"V1 login successful. Response: {resp}, Cookies: {new_cookie}")
                     return new_cookie, None
-                elif "_fair" in response_data["ret"]:
-                    LOGGER.error(f"V1 Login failed (status 200): Invalid credentials. Message: {response_data['msg']}")
-                    return None, ("error_login", response_data["msg"])
+                elif "_fair" in resp["ret"]:
+                    LOGGER.error(f"V1 login failed (200): Invalid credentials. {resp['msg']}")
+                    return None, ("login_failed", resp["msg"])
                 else:
-                    LOGGER.error(f"V1 Login failed. Status: {response.status}. Response data: {response_data}")
-                    return None, ("error_network", None)
+                    LOGGER.error(f"V1 login failed. Status: {response.status}")
+                    return None, ("network_error", None)
 
         except Exception as ex:
             LOGGER.error(f"V1 Login exception: {type(ex).__name__}. Details: {ex}")
-            return None, ("error_network", None)
+            return None, ("unknown", None)
 
-    async def _v2_server_login(self, session) -> Any:
-        """Login to HDC v2 server."""
+    async def _v2_server_login(self, user_input, session) -> Any:
+        """Login to the I'Park Smart Home server (v2) and retrieve session cookies."""
         url = "https://center.hdc-smart.com/v3/auth/login"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": self.data[CONF_UUID],
+            "Authorization": user_input[CONF_UUID],
             "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36"
         }
 
         try:
             async with session.post(url=url, headers=headers, timeout=5) as response:
-                response_data = await response.json()
+                resp = await response.json()
         
                 if response.status == 200:
-                    LOGGER.info(f"V2 Login successful. Response data: {response_data}")
-                    return response_data, None
+                    LOGGER.info(f"V2 login successful: {resp}")
+                    return resp, None
                 elif response.status == 500:
-                    LOGGER.error(f"V2 Login failed (status 500): Server error. Error message: {response_data['err']}")
-                    return None, ("error_login", response_data["err"])
+                    LOGGER.error(f"V2 login failed (500): {resp["err"]}")
+                    return None, ("login_failed", resp["err"])
                 else:
-                    LOGGER.error(f"V2 Login failed. Status: {response.status}. Response data: {response_data}")
-                    return None, ("error_network", None)
-                
+                    LOGGER.error(f"V2 login failed. Status: {response.status}")
+                    return None, ("network_error", None)
+        
         except Exception as ex:
             LOGGER.error(f"V2 Login exception: {type(ex).__name__}. Details: {ex}")
-            return None, ("error_network", None)
+            return None, ("unknown", None)
 
     async def async_step_center(
         self, 
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the center version selection."""
+        """Handle user selection for center version."""
         errors = {}
 
         if user_input is not None:
-            self.data.update(user_input)
-            self.center_version = user_input["version"]
-            if self.center_version == "version1.0":
-                self.config_identifier = CONF_USERNAME
+            if user_input[CONF_VERSION] == CONF_VERSION_1:
                 return await self.async_step_center_v1()
             else:
-                self.config_identifier = CONF_UUID
                 return await self.async_step_center_v2()
-
-        data_schema = vol.Schema({
-            "version": selector({
-                "select": {
-                    "options": ["version1.0", "version2.0"],
-                    "mode": "dropdown",
-                }
-            })
-        })
 
         return self.async_show_form(
             step_id="center",
-            data_schema=data_schema,
+            data_schema=vol.Schema({
+                "version": selector({
+                    "select": {
+                        "options": [CONF_VERSION_1, CONF_VERSION_2],
+                        "mode": "dropdown",
+                    }
+                })
+            }),
             errors=errors,
         )
 
@@ -180,24 +187,23 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         self, 
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the center v1."""
+        """Handle the center version 1."""
         errors = {}
         description_placeholders = None  
 
         if user_input is not None:
-            self.data.update({**user_input, "identifier": self.config_identifier})
             session = async_create_clientsession(self.hass)
 
-            response, error_message = await self._v1_server_login(session)
+            response, error_message = await self._v1_server_login(user_input, session)
 
             if error_message:
                 errors["base"] = error_message[0]
                 description_placeholders = {"err": error_message[1]}
             else:
-                self.data[self.center_version] = response
-                await self.async_set_unique_id(user_input[self.config_identifier])
+                user_input[CONF_SESSION] = response
+                await self.async_set_unique_id(user_input[CONF_USERNAME])
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=user_input[self.config_identifier], data=self.data)
+                return self.async_create_entry(title=user_input[CONF_USERNAME], data=user_input)
 
         data_schema = vol.Schema({
             vol.Required(CONF_IP_ADDRESS): cv.string,
@@ -213,27 +219,26 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_center_v2(
-        self, 
+        self,
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the center v2."""
+        """Handle the center version 2."""
         errors = {}
         description_placeholders = None  
 
         if user_input is not None:
-            self.data.update({**user_input, "identifier": self.config_identifier})
             session = async_create_clientsession(self.hass)
 
-            response, error_message = await self._v2_server_login(session)
+            response, error_message = await self._v2_server_login(user_input, session)
 
             if error_message:
                 errors["base"] = error_message[0]
                 description_placeholders = {"err": error_message[1]["msg"]}
             else:
-                self.data[self.center_version] = response
-                await self.async_set_unique_id(user_input[self.config_identifier])
+                user_input[CONF_SESSION] = response
+                await self.async_set_unique_id(user_input[CONF_UUID])
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=user_input[self.config_identifier], data=self.data)
+                return self.async_create_entry(title=user_input[CONF_UUID], data=user_input)
 
         data_schema = vol.Schema({
             vol.Required("elevator_number", default=1): ConfigFlow.int_between(1, 3),
@@ -247,18 +252,6 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=description_placeholders
         )
-    
-    async def async_step_import(
-        self,
-        user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle configuration by yaml file."""
-        await self.async_set_unique_id(user_input[self.config_identifier]) 
-        for entry in self._async_current_entries():
-            if entry.unique_id == self.unique_id:
-                self.hass.config_entries.async_update_entry(entry, data=user_input) 
-                self._abort_if_unique_id_configured()
-        return self.async_create_entry(title=user_input[self.config_identifier], data=user_input)
 
 
 class OptionsFlowHandler(OptionsFlow):
@@ -267,9 +260,29 @@ class OptionsFlowHandler(OptionsFlow):
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize options flow."""
         self.entry = entry
+    
+    def get_data_schema(self) -> vol.Schema:
+        """Get the appropriate schema based on the entry data."""
+        if CONF_SESSION not in self.entry.data:
+            return vol.Schema({
+                vol.Required(
+                    "max_send_retry", 
+                    default=self.entry.options.get("max_send_retry", DEFAULT_MAX_SEND_RETRY)
+                ): ConfigFlow.int_between(1, 30),
+                vol.Required(
+                    "packet_viewer",
+                    default=self.entry.options.get("packet_viewer", DEFAULT_PACKET_VIEWER)
+                ): cv.boolean,
+            })
+        return vol.Schema({
+            vol.Required(
+                CONF_SCAN_INTERVAL,
+                default=self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            ): cv.positive_int,
+        })
 
     async def async_step_init(
-        self, 
+        self,
         user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle options flow."""
@@ -279,22 +292,9 @@ class OptionsFlowHandler(OptionsFlow):
             return self.async_show_form(step_id="init", data_schema=None)
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-
+        
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required(
-                    "max_transmission", 
-                    default=self.entry.options.get("max_transmission", DEFAULT_MAX_TRANSMISSION)
-                ): ConfigFlow.int_between(1, 50),
-                vol.Required(
-                    "packet_viewer",
-                    default=self.entry.options.get("packet_viewer", DEFAULT_PACKET_VIEWER)
-                ): cv.boolean,
-                vol.Required(
-                    CONF_SCAN_INTERVAL,
-                    default=self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-                ): cv.positive_int,
-            }),
+            data_schema=self.get_data_schema(),
             errors=errors
         )

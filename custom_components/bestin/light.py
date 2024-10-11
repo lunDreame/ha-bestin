@@ -2,31 +2,26 @@
 
 from __future__ import annotations
 
-import math
 from typing import Optional
 
 from homeassistant.components.light import (
     ColorMode,
     DOMAIN as LIGHT_DOMAIN,
     LightEntity,
+    COLOR_MODE_BRIGHTNESS,
+    COLOR_MODE_COLOR_TEMP,
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP_KELVIN
+    ATTR_COLOR_TEMP_KELVIN,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_ON, STATE_OFF, ATTR_STATE
 from homeassistant.core import callback, HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util.color import value_to_brightness
-from homeassistant.util.percentage import percentage_to_ranged_value
 
-from .const import NEW_LIGHT
+from .const import CONF_VERSION, NEW_LIGHT
 from .device import BestinDevice
 from .hub import BestinHub
-
-BRIGHTNESS_SCALE = (1, 100)
-
-COLOR_TEMP_SCALE = (3000, 5700)  # Kelvin values for the 10 steps
-COLOR_TEMP_LEVELS = list(range(COLOR_TEMP_SCALE[0], COLOR_TEMP_SCALE[1]+1, 300))
 
 
 async def async_setup_entry(
@@ -71,11 +66,13 @@ class BestinLight(BestinDevice, LightEntity):
         self._color_mode = ColorMode.ONOFF
         self._supported_color_modes = {ColorMode.ONOFF}
         
-        self._max_color_temp_kelvin = COLOR_TEMP_SCALE[1]  # 5700K
-        self._min_color_temp_kelvin = COLOR_TEMP_SCALE[0]  # 3000K
+        self._max_color_temp_kelvin = 5700  # 5700K
+        self._min_color_temp_kelvin = 3000  # 3000K
         
-        self._is_smartlight = self._device_info.device_type == "smartlight"  # center
-        self._version_exists = getattr(hub.api, "version", False)
+        # [3000, 3300, 3600, 3900, 4200, 4500, 4800, 5100, 5400, 5700]
+        self._color_temp_levels = list(range(3000, 5701, 300))
+
+        self._version_exists = getattr(hub.api, CONF_VERSION, False)
 
     @property
     def color_mode(self) -> ColorMode:
@@ -99,8 +96,8 @@ class BestinLight(BestinDevice, LightEntity):
     
     def state_parse(self, state: dict) -> bool:
         """State parse for smartlight."""
-        brightness = state["brightness"]
-        color_temp = state["color_temp"]
+        brightness = state[COLOR_MODE_BRIGHTNESS]
+        color_temp = state[COLOR_MODE_COLOR_TEMP]
 
         if brightness:
             self._color_mode = ColorMode.BRIGHTNESS
@@ -109,7 +106,7 @@ class BestinLight(BestinDevice, LightEntity):
             self._color_mode = ColorMode.COLOR_TEMP
             self._supported_color_modes = {ColorMode.COLOR_TEMP}
         
-        return state["is_on"]
+        return state[ATTR_STATE]
     
     def convert_brightness(
         self,
@@ -117,12 +114,16 @@ class BestinLight(BestinDevice, LightEntity):
         reverse: bool = False
     ) -> int:
         """Convert the brightness value."""
-        brightness_step = 10 if self._is_smartlight else 100
+        brightness_step = (
+            10 if self._device_info.device_type == "smartlight"
+            else 1
+        )
         if reverse:
-            result = (brightness - 1) * (brightness_step - 1) / (255 - 1) + 1
-            return round(result)
+            # Converts the ones place of a given two-digit number to 0.
+            value = round(brightness / 2.55)
+            return ((value // 10) * 10) // brightness_step
         else:
-            return int((brightness - 1) * (255 - 1) / (brightness_step - 1) + 1)
+            return round((brightness * brightness_step) * 2.55)
     
     def convert_color_temp(
         self,
@@ -130,45 +131,43 @@ class BestinLight(BestinDevice, LightEntity):
         reverse: bool = False
     ) -> int:
         """Convert the color temperature value."""
-        color_temp_step = 1 if self._is_smartlight else 10  # 1: center / 10: serial
+        color_temp_step = (
+            1 if self._device_info.device_type == "smartlight"
+            else 10
+        )
         if reverse:
-            for i, temp in enumerate(COLOR_TEMP_LEVELS):
+            for i, temp in enumerate(self._color_temp_levels):
                 if color_temp < temp:
-                    return i * color_temp_step
-            return 10 * color_temp_step
+                    return color_temp_step * i
+            return color_temp_step * 10
         else:
-            return COLOR_TEMP_LEVELS[(color_temp // color_temp_step) - 1]
+            index = max((color_temp // color_temp_step) - 1, 0)
+            return self._color_temp_levels[index]
 
     def set_light_command(
         self,
         state: str,
         brightness: int | None,
-        kelvin: int | None
+        color_temp: int | None
     ) -> dict:
-        brightness_value = kelvin_value = "null"
-        if brightness is not None:
-            brightness_value = str(self.convert_brightness(brightness, reverse=True))
-        if kelvin is not None:
-            kelvin_value = str(self.convert_color_temp(kelvin, reverse=True))
-        
         light_command = {
-            "state": state,
-            "dimming": brightness_value,
-            "color": kelvin_value,
+            ATTR_STATE: state,
+            "dimming": str(brightness) if brightness is not None else "null",
+            "color": str(color_temp) if color_temp is not None else "null",
         }
         return light_command
 
     @property
     def brightness(self) -> Optional[int]:
         """Return the current brightness."""
-        brightness_value = self._device_info.state["brightness"]
+        brightness_value = self._device_info.state[COLOR_MODE_BRIGHTNESS]
         return self.convert_brightness(brightness_value)
     
     @property
     def color_temp_kelvin(self) -> Optional[int]:
         """The current color temperature in Kelvin."""
-        color_temp_step = self._device_info.state["color_temp"]
-        return self.convert_color_temp(color_temp_step)
+        color_temp_value = self._device_info.state[COLOR_MODE_COLOR_TEMP]
+        return self.convert_color_temp(color_temp_value)
 
     @property
     def max_color_temp_kelvin(self) -> int:
@@ -182,26 +181,36 @@ class BestinLight(BestinDevice, LightEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn on light."""
+        brightness = kwargs.get(ATTR_BRIGHTNESS)
+        color_temp = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+
+        command_kwargs = {}
+        if brightness:
+            brightness = self.convert_brightness(brightness, reverse=True)
+            command_kwargs[COLOR_MODE_BRIGHTNESS] = brightness
+        if color_temp:
+            color_temp = self.convert_color_temp(color_temp, reverse=True)
+            command_kwargs[COLOR_MODE_COLOR_TEMP] = color_temp
+
         if self._version_exists:
-            brightness = kwargs.get(ATTR_BRIGHTNESS)
-            kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+            light_command = self.set_light_command(STATE_ON, brightness, color_temp)
 
-            light_command = self.set_light_command("on", brightness, kelvin)
-
-            switch = light_command if self._has_smartlight else "on"
+            switch = light_command if self._has_smartlight else STATE_ON
             await self.enqueue_command(switch=switch)
+        elif command_kwargs:
+            await self.enqueue_command(**command_kwargs)
         else:
             await self.enqueue_command(True)
 
     async def async_turn_off(self, **kwargs):
         """Turn off light."""
+        brightness = kwargs.get(ATTR_BRIGHTNESS)
+        color_temp = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+
         if self._version_exists:
-            brightness = kwargs.get(ATTR_BRIGHTNESS)
-            kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+            light_command = self.set_light_command(STATE_OFF, brightness, color_temp)
 
-            light_command = self.set_light_command("off", brightness, kelvin)
-
-            switch = light_command if self._has_smartlight else "off"
+            switch = light_command if self._has_smartlight else STATE_OFF
             await self.enqueue_command(switch=switch)
         else:
             await self.enqueue_command(False)

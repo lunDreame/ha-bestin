@@ -14,7 +14,7 @@ from homeassistant.const import (
 
 DOMAIN = "bestin"
 NAME = "BESTIN"
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -24,18 +24,34 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
-LOGGER: logging.Logger = logging.getLogger(__package__)
+LOGGER = logging.getLogger(__package__)
 
-DEFAULT_PORT: int = 8899
-DEFAULT_SCAN_INTERVAL: int = 30
-DEFAULT_MAX_TRANSMISSION: int = 10
+CONF_VERSION = "version"
+CONF_VERSION_1 = "version1.0"
+CONF_VERSION_2 = "version2.0"
+CONF_SESSION = "session"
 
-DEFAULT_PACKET_VIEWER: bool = False
+DEFAULT_PORT = 8899
+DEFAULT_MAX_SEND_RETRY = 10
+DEFAULT_PACKET_VIEWER = False
+
+DEFAULT_SCAN_INTERVAL = 30
+
+SMART_HOME_1 = "Smart Home 1.0"
+SMART_HOME_2 = "Smart Home 2.0"
+
+SPEED_INT_LOW = 1
+SPEED_INT_MEDIUM = 2
+SPEED_INT_HIGH = 3
+
+SPEED_STR_LOW = "low"
+SPEED_STR_MEDIUM = "mid"
+SPEED_STR_HIGH = "high"
+
+PRESET_NONE = "none"
+PRESET_NV = "natural_ventilation"
 
 BRAND_PREFIX = "bestin"
-
-VERSION_1 = "version1.0"
-VERSION_2 = "version2.0"
 
 NEW_CLIMATE = "climates"
 NEW_FAN = "fans"
@@ -53,63 +69,35 @@ MAIN_DEVICES: list[str] = [
     "elevator",
 ]
 
-SIGNAL_MAP: dict[str, Platform] = {
-    Platform.CLIMATE: NEW_CLIMATE,
-    Platform.FAN: NEW_FAN,
-    Platform.LIGHT: NEW_LIGHT,
-    Platform.SENSOR: NEW_SENSOR,
-    Platform.SWITCH: NEW_SWITCH,
+PLATFORM_SIGNAL_MAP = {
+    Platform.CLIMATE.value: NEW_CLIMATE,
+    Platform.FAN.value: NEW_FAN,
+    Platform.LIGHT.value: NEW_LIGHT,
+    Platform.SENSOR.value: NEW_SENSOR,
+    Platform.SWITCH.value: NEW_SWITCH,
 }
 
-DOMAIN_MAP: dict[str, Platform] = {
-    "thermostat": Platform.CLIMATE.value,
-    "fan": Platform.FAN.value,
-    "light": Platform.LIGHT.value,
-    "outlet:consumption": Platform.SENSOR.value,
-    "energy": Platform.SENSOR.value,
-    "outlet": Platform.SWITCH.value,
-    "outlet:cutoff": Platform.SWITCH.value,
-    "gas": Platform.SWITCH.value,
-    "doorlock": Platform.SWITCH.value,
-}
-
-# Center
-CTR_SIGNAL_MAP: dict[Platform, str] = {
-    Platform.CLIMATE: NEW_CLIMATE,
-    Platform.FAN: NEW_FAN,
-    Platform.LIGHT: NEW_LIGHT,
-    Platform.SENSOR: NEW_SENSOR,
-    Platform.SWITCH: NEW_SWITCH,
-}
-
-CTR_DOMAIN_MAP: dict[str, Platform] = {
+DEVICE_PLATFORM_MAP = {
     "temper": Platform.CLIMATE.value,
     "thermostat": Platform.CLIMATE.value,
+    "fan": Platform.FAN.value,
     "ventil": Platform.FAN.value,
     "light": Platform.LIGHT.value,
     "smartlight": Platform.LIGHT.value,
     "livinglight": Platform.LIGHT.value,
+    "outlet": Platform.SWITCH.value,
+    "outlet:cutoff": Platform.SWITCH.value,
+    "outlet:consumption": Platform.SENSOR.value,
+    "energy": Platform.SENSOR.value,
+    "doorlock": Platform.SWITCH.value,
+    "elevator": Platform.SWITCH.value,
     "elevator:direction": Platform.SENSOR.value,
     "elevator:floor": Platform.SENSOR.value,
     "electric": Platform.SWITCH.value,
     "electric:cutoff": Platform.SWITCH.value,
     "gas": Platform.SWITCH.value,
-    "elevator": Platform.SWITCH.value,
 }
 
-# Fan (Ventil)
-SPEED_STR_LOW = "low"
-SPEED_STR_MEDIUM = "mid"
-SPEED_STR_HIGH = "high"
-
-SPEED_INT_LOW = 1
-SPEED_INT_MEDIUM = 2
-SPEED_INT_HIGH = 3
-
-PRESET_NONE = "None"
-PRESET_NATURAL_VENTILATION = "Natural Ventilation"
-
-# Energy (HEMS) Index Map
 ELEMENT_BYTE_RANGE: dict[str, tuple[slice]] = {
     "electric": (slice(8, 12), slice(8, 12)),
     "gas": (slice(32, 36), slice(25, 29)),
@@ -118,8 +106,7 @@ ELEMENT_BYTE_RANGE: dict[str, tuple[slice]] = {
     "water": (slice(17, 20), slice(17, 20)),
 }
 
-# Energy (HEMS) Class Map
-ELEMENT_DEVICE_CLASS: dict[str, UnitOfPower | SensorDeviceClass] = {
+ELEMENT_DEVICE_CLASS: dict[str, Any] = {
     "outlet:consumption": UnitOfPower.WATT,
     "electric:realtime": SensorDeviceClass.POWER,
     "electric:total": SensorDeviceClass.ENERGY,
@@ -127,8 +114,7 @@ ELEMENT_DEVICE_CLASS: dict[str, UnitOfPower | SensorDeviceClass] = {
     "water:total": SensorDeviceClass.WATER,
 }
 
-# Energy (HEMS) Unit Map
-ELEMENT_UNIT: dict[str, UnitOfPower | UnitOfEnergy | UnitOfVolumeFlowRate | UnitOfVolume] = {
+ELEMENT_UNIT: dict[str, Any] = {
     "outlet:consumption": UnitOfPower.WATT,
     "electric:realtime": UnitOfPower.WATT,
     "electric:total": UnitOfEnergy.KILO_WATT_HOUR,
@@ -142,7 +128,6 @@ ELEMENT_UNIT: dict[str, UnitOfPower | UnitOfEnergy | UnitOfVolumeFlowRate | Unit
     "water:total": UnitOfVolume.CUBIC_METERS,
 }
 
-# Energy (HEMS) Value Convert
 ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
     "outlet:consumption": lambda value: value,
     "elevator:floor": lambda value: value,
@@ -170,7 +155,7 @@ ELEMENT_VALUE_CONVERSION: dict[str, Any] = {
 
 @dataclass
 class DeviceInfo:
-    """Set device information."""
+    """Represents information about a device."""
     device_type: str
     name: str
     room: str
@@ -179,7 +164,7 @@ class DeviceInfo:
 
 @dataclass
 class DeviceProfile:
-    """Set the device profile."""
+    """Manages device profiles, including callbacks and command handling."""
     enqueue_command: Callable[..., None]
     domain: str
     unique_id: str
@@ -187,15 +172,15 @@ class DeviceProfile:
     callbacks: Set[Callable[..., None]] = field(default_factory=set)
 
     def add_callback(self, callback: Callable[..., None]) -> None:
-        """Add a callback.."""
+        """Adds a callback to the set of callbacks."""
         self.callbacks.add(callback)
 
     def remove_callback(self, callback: Callable[..., None]) -> None:
-        """Remove the callback."""
+        """Removes a callback from the set of callbacks."""
         self.callbacks.discard(callback)
     
     def update_callbacks(self) -> None:
-        """Updates the registered callback."""
+        """Calls all registered callbacks."""
         for callback in self.callbacks:
             assert callable(callback), "Callback should be callable"
             callback()

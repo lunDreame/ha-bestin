@@ -6,98 +6,116 @@ import xml.etree.ElementTree as ET
 import aiohttp
 import json
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.climate import HVACMode
+from homeassistant.components.climate.const import (
+    SERVICE_SET_TEMPERATURE,
+    ATTR_HVAC_MODE,
+    ATTR_PRESET_MODE,
+    ATTR_CURRENT_TEMPERATURE,
+    HVACMode,
+)
+from homeassistant.components.light import (
+    COLOR_MODE_BRIGHTNESS,
+    COLOR_MODE_COLOR_TEMP,
+)
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import (
     CONF_IP_ADDRESS,
     CONF_USERNAME,
     CONF_PASSWORD,
     CONF_UUID,
     CONF_SCAN_INTERVAL,
+    CONF_URL,
+    ATTR_STATE,
+    WIND_SPEED,
 )
-from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     LOGGER,
     BRAND_PREFIX,
+    CONF_VERSION_1,
+    CONF_SESSION,
     DEFAULT_SCAN_INTERVAL,
-    VERSION_1,
-    VERSION_2,
     SPEED_STR_LOW,
     SPEED_STR_MEDIUM,
     SPEED_STR_HIGH,
     MAIN_DEVICES,
-    CTR_SIGNAL_MAP,
-    CTR_DOMAIN_MAP,
+    DEVICE_PLATFORM_MAP,
+    PLATFORM_SIGNAL_MAP,
     DeviceProfile,
     DeviceInfo,
 )
 
-V2_SESSION_HEADER = {
-    "Content-Type": "application/json",
-    "User-Agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/78.0.3904.70 safari/537.36",
-}
 
 class CenterAPIv2:
-    """Bestin HDC Smarthome API v2 Class."""
+    """Initialize CenterAPIv2 for Smart Home 2.0 API."""
 
-    def __init__(self, hass, entry) -> None:
-        """API initialization."""
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        """Initialize the CenterAPIv2."""
         self.elevator_arrived = False
-        self.elevator_number = entry.data.get("elevator_number", 1)
+        self.register_elevator: str | None = entry.data.get(CONF_IP_ADDRESS)
+        self.elevator_number: int = entry.data.get("elevator_number", 1)
 
-        self.features_list: list = []
-        self.elevator_data: dict = {}
+        self.features_list: list[dict] = []
+        self.elevator_data: dict[str,  dict] = {}
 
-    async def _version2_device_status(self, args=None):
-        """Updates the version 2 device status asynchronously."""
-        if args is not None:
-            LOGGER.debug(f"Task execution started with argument: {args}")
-            self.last_update_time = args
+    async def _v2_device_status(self, args=datetime.now(timezone.utc)):
+        """Update device status for v2 API."""
+        self.last_update_time = args  # 2024-09-29 05:05:58.288861+00:00
         
         if self.features_list:
             await self.process_features(self.features_list)
         else:
             await self.fetch_feature_list()
-
-        for i in range(1, self.elevator_number + 1):
-            self._elevator_registration(str(i))
         
-    async def _v2_refresh_session(self) -> None:
-        """Refresh session for version 2."""
+        if self.register_elevator:
+            for i in range(1, self.elevator_number + 1):
+                self._elevator_registration(str(i))
+    
+    async def _v2_refresh_session(self, args=datetime.now(timezone.utc)):
+        """Refresh session for v2 API."""
         url = "https://center.hdc-smart.com/v3/auth/login"
-        headers = V2_SESSION_HEADER.copy()
-        headers["Authorization"] = self.entry.data[CONF_UUID]
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": self.entry.data[CONF_UUID],
+            "User-Agent": "Mozilla/5.0"
+        }
 
         try:
             async with self.session.post(url=url, headers=headers, timeout=5) as response:
-                response_data = await response.json()
+                resp = await response.json()
 
                 if response.status != 200:
-                    LOGGER.error(f"Login failed: {response.status} {response_data}")
+                    LOGGER.error(f"Login failed: {response.status} {resp}")
                     return
-                if "err" in response_data:
-                    LOGGER.error(f"Session refresh failed: {response_data['err']}")
+                if "err" in resp:
+                    LOGGER.error(f"Session refresh failed: {resp['err']}")
                     return
 
-                LOGGER.debug(f"Session refreshed: {response_data}")
+                LOGGER.debug(f"Session refreshed: {resp}")
+                self.last_sess_refresh = args
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
-                    data={**self.entry.data, self.version: response_data},
+                    data={**self.entry.data, CONF_SESSION: resp},
                 )
                 await asyncio.sleep(1)
         except Exception as ex:
             LOGGER.error(f"Exception during session refresh: {type(ex).__name__}: {ex}")
 
-    async def elevator_call_request(self) -> None:
-        """Elevator call request."""
-        url = f"{self.entry.data[self.version]['url']}/v2/admin/elevators/home/apply"
-        headers = V2_SESSION_HEADER.copy()
-        headers["Authorization"] = self.entry.data[CONF_UUID]
+    async def elevator_call_request(self):
+        """Send elevator call request."""
+        url = f"{self.entry.data[CONF_SESSION][CONF_URL]}/v2/admin/elevators/home/apply"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": self.entry.data[CONF_UUID],
+            "User-Agent": "Mozilla/5.0"
+        }
         data = {
             "address": self.entry.data[CONF_IP_ADDRESS],
             "direction": "down"
@@ -106,20 +124,20 @@ class CenterAPIv2:
         try:
             async with self.session.post(url=url, headers=headers, json=data) as response:
                 response.raise_for_status()
-                response_data = await response.json(content_type="text/plain")
-                result_status = self.result_after_request(response_data)
+                resp = await response.json(content_type="text/plain")
+                result_status = self.result_after_request(resp)
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.info(f"Just a central server elevator request successful")
                     self.hass.create_task(self.fetch_elevator_status())
                 else:
-                    LOGGER.error(f"Only central server elevator request failed: {response_data}")
+                    LOGGER.error(f"Only central server elevator request failed: {resp}")
         except Exception as ex:
             LOGGER.error(f"Error requesting elevator command: {ex}")
 
-    async def fetch_elevator_status(self) -> None:
-        """Fetch elevator status."""
-        url = f"{self.entry.data[self.version]['url']}/v2/admin/elevators/sse"
+    async def fetch_elevator_status(self):
+        """Fetch and process elevator status updates."""
+        url = f"{self.entry.data[CONF_SESSION][CONF_URL]}/v2/admin/elevators/sse"
         try:
             async with self.session.get(url) as response:
                 if response.status != 200:
@@ -129,7 +147,7 @@ class CenterAPIv2:
                 async for line in response.content:
                     if line.startswith(b"data:"):
                         message = line.decode('utf-8').strip("data:").strip()
-                        if json.loads(message).get("address") == self.entry.data[CONF_IP_ADDRESS]:
+                        if json.loads(message).get("address") == self.register_elevator:
                             LOGGER.debug(f"Received message - elevator: {message}")
                             await self.handle_message_info(message)
                     if self.elevator_arrived:
@@ -138,112 +156,126 @@ class CenterAPIv2:
         except Exception as ex:
             LOGGER.error(f"Fetch elevator status error occurred: {ex}")
 
-    async def handle_message_info(self, message: str) -> None:
-        """Handle message info for elevator status monitoring."""
+    async def handle_message_info(self, message: str):
+        """Process elevator message information."""
         data = json.loads(message)
-        
-        if "move_info" in data:
-            serial = data["move_info"]["Serial"]
-            move_info = data["move_info"]
 
+        if "move_info" in data:
+            move_info = data["move_info"]
+            serial = move_info["Serial"]
+        
             self.elevator_data = {serial: move_info}
             self.elevator_data = dict(sorted(self.elevator_data.items()))
             LOGGER.debug("Elevator data: %s", self.elevator_data)
 
             if len(self.elevator_data) >= 2:
                 for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
-                    floor = f"{info["move_info"]["Floor"]} 층"
-                    move_dir = info["move_info"]["MoveDir"]
-            
+                    floor = info["Floor"]
+                    move_dir = info["MoveDir"].upper()
+                    self.elevator_data[f"floor{str(idx)}"] = floor
+
                     self.set_device("elevator", 1, f"floor_{str(idx)}", floor)
                     self.set_device("elevator", 1, f"direction_{str(idx)}", move_dir)
             else:
-                self.set_device("elevator", 1, f"floor_1", move_info["Floor"])
-                self.set_device("elevator", 1, f"direction_1", move_info["MoveDir"])
+                floor = move_info["Floor"]
+                move_dir = move_info["MoveDir"].upper()
+                self.elevator_data[f"floor1"] = floor
+                
+                self.set_device("elevator", 1, "floor_1", floor)
+                self.set_device("elevator", 1, "direction_1", move_dir)
         else:
             for idx in range(1, self.elevator_number + 1):
-                self.set_device("elevator", 1, f"floor_{str(idx)}", "도착 층")
-                self.set_device("elevator", 1, f"direction_{str(idx)}", "도착")
+                floor = self.elevator_data.get(f"floor{str(idx)}", "UNKNOWN")
             
-            self.elevator_arrived = True
+                self.set_device("elevator", 1, f"floor_{str(idx)}", floor)
+                self.set_device("elevator", 1, f"direction_{str(idx)}", "ARRIVAL")
+                await asyncio.sleep(2)  # Wait for a while
 
-    async def request_feature_command(self, device_type: str, room_id: int, unit: str, value: str | dict) -> None:
-        """Request feature command."""
-        url = f"{self.entry.data[self.version]['url']}/v2/api/features/{device_type}/{room_id}/apply"
-        headers = V2_SESSION_HEADER.copy()
-        headers["access-token"] = self.entry.data[self.version]["access-token"]
+                self.set_device("elevator", 1, f"floor_{str(idx)}", "")
+                self.set_device("elevator", 1, f"direction_{str(idx)}", "IDLE")
+
+            self.elevator_arrived = True
+    
+    async def request_feature_command(
+        self, device_type: str, room_id: int, unit: str, value: dict | str
+    ):
+        """Send feature command request."""
+        url = f"{self.entry.data[CONF_SESSION][CONF_URL]}/v2/api/features/{device_type}/{room_id}/apply"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+            "access-token": self.entry.data[CONF_SESSION]["access-token"],
+        }
         data = {"unit": unit, "state": value}
         
         if device_type == "ventil":
             data.update({"unit": unit[:-1], "mode": "", "unit_mode": ""})
         if device_type == "smartlight":
             data.update({"unit": unit[-1], **value})
-            LOGGER.debug(data)
-        
+
         try:
             async with self.session.put(url=url, headers=headers, json=data) as response:
                 response.raise_for_status()
-                response_data = await response.json()
-                result_status = self.result_after_request(response_data)
+                resp = await response.json()
+                result_status = self.result_after_request(resp)
 
                 if response.status == 200 and result_status == "ok":
                     LOGGER.info(f"{device_type} in room {room_id} set to {unit}={value}.")
                     await self.fetch_feature_status(device_type, room_id)
                 else:
-                    LOGGER.warning(
-                        f"Failed to set {device_type} in room {room_id}. Response: {response_data}"
-                    )
+                    LOGGER.warning(f"Failed to set {device_type} in room {room_id}. Response: {resp}")
         except Exception as ex:
             LOGGER.error(f"Error setting {device_type} in room {room_id}: {ex}")
 
-    async def fetch_feature_status(self, feature_name: str, room_id: int) -> None:
-        """Fetch feature status."""
-        url = f"{self.entry.data[self.version]['url']}/v2/api/features/{feature_name}/{room_id}/apply"
-        headers = V2_SESSION_HEADER.copy()
-        headers["access-token"] = self.entry.data[self.version]["access-token"]
-
+    async def fetch_feature_status(self, feature_name: str, room_id: int):
+        """Fetch status of a specific feature."""
+        url = f"{self.entry.data[CONF_SESSION][CONF_URL]}/v2/api/features/{feature_name}/{room_id}/apply"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+            "access-token": self.entry.data[CONF_SESSION]["access-token"],
+        }
+        
         try:
             async with self.session.get(url=url, headers=headers) as response:
                 response.raise_for_status()
-                response_data = await response.json()
-                result_status = self.result_after_request(response_data)
+                resp = await response.json()
+                result_status = self.result_after_request(resp)
 
                 if response.status == 200 and result_status == "ok":
-                    LOGGER.debug(f"Fetched feature status: {response_data}")
+                    LOGGER.debug(f"Fetched feature status: {resp}")
                     if feature_name == "smartlight":
                         units = [
-                            unit for map in response_data["map"]
+                            unit for map in resp["map"]
                             if map["units"] is not None
                             for unit in map["units"]
                         ]
                     else:
-                        units = response_data["units"]
+                        units = resp["units"]
                     
                     for unit in units:
                         if feature_name == "smartlight":
                             unit_last = unit["unit"]
                             unit_state = {
-                                "is_on": True if unit["state"] == "on" else False,
-                                "brightness": int(unit["dimming"]) if unit["dimming"] != "null" else None,
-                                "color_temp": int(unit["color"]) if unit["color"] != "null" else None,
+                                ATTR_STATE: unit["state"] == "on",
+                                COLOR_MODE_BRIGHTNESS: int(unit["dimming"]) if unit["dimming"] != "null" else None,
+                                COLOR_MODE_COLOR_TEMP: int(unit["color"]) if unit["color"] != "null" else None,
                             }
                         else:
                             unit_last = unit["unit"][-1]
                             unit_state = unit["state"]
 
                         if feature_name in ["light", "smartlight", "livinglight", "gas", "doorlock"]:
-                            self._parse_common_status(
-                                feature_name, room_id, unit_last, unit_state
-                            )
+                            self._parse_common_status(feature_name, room_id, unit_last, unit_state)
                         if hasattr(self, name := f"_parse_{feature_name}_status"):
                             getattr(self, name)(room_id, unit_last, unit_state)
                 else:
-                    LOGGER.error(f"Failed to get {feature_name} status: {response_data}")
+                    LOGGER.error(f"Failed to get {feature_name} status: {resp}")
         except Exception as ex:
             LOGGER.error(f"Error getting {feature_name} status: {ex}")
     
-    async def process_features(self, features: list) -> None:
-        """Process features."""
+    async def process_features(self, features: list[dict]):
+        """Process a list of features."""
         for feature in features:
             if feature["name"] in ["sensor", "mode"]:
                 continue
@@ -262,136 +294,97 @@ class CenterAPIv2:
                 ]
             )
 
-    async def fetch_feature_list(self) -> None:
-        """Fetch feature list."""
-        url = f"{self.entry.data[self.version]['url']}/v2/api/features/apply"
-        headers = V2_SESSION_HEADER.copy()
-        headers["access-token"] = self.entry.data[self.version]["access-token"]
+    async def fetch_feature_list(self):
+        """Fetch the list of available features."""
+        url = f"{self.entry.data[CONF_SESSION][CONF_URL]}/v2/api/features/apply"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+            "access-token": self.entry.data[CONF_SESSION]["access-token"],
+        }
         
         try:
             async with self.session.get(url=url, headers=headers) as response:
                 response.raise_for_status()
-                response_data = await response.json()
-                result_status = self.result_after_request(response_data)
+                resp = await response.json()
+                result_status = self.result_after_request(resp)
 
                 if response.status == 200 and result_status == "ok":
-                    LOGGER.debug(f"Fetched feature list: {response_data}")
-                    self.features_list.extend(response_data["features"])
-                    await self.process_features(response_data["features"])
+                    LOGGER.debug(f"Fetched feature list: {resp}")
+                    self.features_list.extend(resp["features"])
+                    await self.process_features(resp["features"])
                 else:
-                    LOGGER.error(f"Failed to fetch feature list: {response_data}")
+                    LOGGER.error(f"Failed to fetch feature list: {resp}")
         except Exception as ex:
             LOGGER.error(f"Error fetching feature list: {ex}")
 
 
 class BestinCenterAPI(CenterAPIv2):
-    """Bestin HDC Smarthome API Class."""
+    """BestinCenterAPI for Smart Home 1.0/2.0 API."""
 
     def __init__(
         self, 
         hass: HomeAssistant,
         entry: ConfigEntry,
-        entity_groups,
-        hub_id,
-        version,
-        version_identifier,
-        elevator_registration,
+        entity_groups: dict[str, set[str]],
+        hub_id: str,
+        version: str,
         add_device_callback: Callable
     ) -> None:
-        """Initialize API and setup session."""
+        """Initialize API and create session."""
         super().__init__(hass, entry)
         self.hass = hass
         self.entry = entry
         self.entity_groups = entity_groups
         self.hub_id = hub_id
         self.version = version
-        self.version_identifier = version_identifier
-        self.elevator_registration = elevator_registration
         self.add_device_callback = add_device_callback
 
         connector = aiohttp.TCPConnector()
         self.session = aiohttp.ClientSession(connector=connector)
         
-        self.tasks: list = []
-        self.remove_callbacks: list = []
-        self.devices: dict = {}
-        self.last_update_time = datetime.now()
+        self.tasks: list[asyncio.Task] = []
+        self.devices: dict[str, DeviceProfile] = {}
+        self.last_update_time: datetime = None
+        self.last_sess_refresh: datetime = None
 
     def get_short_hash(self, id: str) -> str:
-        """Generate a short hash for a given id."""
+        """Generate a short hash from the given ID."""
         hash_object = hashlib.sha256(id.encode()).digest()
         return base64.urlsafe_b64encode(hash_object)[:8].decode("utf-8").upper()
 
-    async def start(self) -> None:
-        """Start main loop for status updates and session refresh."""
-        self.tasks.append(asyncio.create_task(self.schedule_session_refresh()))
-        await asyncio.sleep(1)
-        
-        version_func = getattr(self, f"_{self.version[:-2]}_device_status")
-        scan_interval = self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-        interval = timedelta(minutes=scan_interval)
-        
-        self.hass.create_task(version_func())
-        self.remove_callbacks.append(
-            async_track_time_interval(self.hass, version_func, interval)
+    async def start(self):
+        """Start the API operations."""
+        version_suffix = self.version[11:12]  # Smart Home 1.0
+    
+        refresh_session_interval = timedelta(
+            minutes=15 if version_suffix == "1" else 60
         )
-
-    async def stop(self) -> None:
-        """Stop main loop and cancel all tasks."""
-        for task in self.tasks:
-            task.cancel()
-        for callback in self.remove_callbacks:
-            callback()
-
-    async def _version1_device_status(self, args=None):
-        """Update device status for version 1 asynchronously."""
-        if args is not None:
-            LOGGER.debug(f"Task execution started with argument: {args}")
-            self.last_update_time = args
-        
-        await asyncio.gather(
-            *[self.get_light_status(i) for i in range(6)],
-            *[self.get_electric_status(i) for i in range(1, 6)],
-            *[self.get_temper_status(i) for i in range(1, 6)],
-            self.get_gas_status(),
-            self.get_ventil_status(),
-            self.get_doorlock_status()
+        device_status_interval = timedelta(
+            minutes=self.entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         )
+    
+        refresh_session = getattr(self, f"_v{version_suffix}_refresh_session")
+        device_status = getattr(self, f"_v{version_suffix}_device_status")
+    
+        await refresh_session()
+        self.hass.create_task(device_status())
 
-    async def _v1_refresh_session(self) -> None:
-        """Refresh session for version 1."""
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
-        params = {
-            "login_ide": self.entry.data[CONF_USERNAME],
-            "login_pwd": self.entry.data[CONF_PASSWORD]
-        }
-        try:
-            async with self.session.get(url=url, params=params, timeout=5) as response:
-                response_data = await response.json(content_type="text/html")
-                if response.status != 200 or "_fair" in response_data:
-                    LOGGER.error(f"Session refresh failed: {response_data.get('msg', 'Unknown error')}")
-                    return
+        self.tasks = [
+            async_track_time_interval(self.hass, refresh_session, refresh_session_interval),
+            async_track_time_interval(self.hass, device_status, device_status_interval)
+        ]
 
-                cookies = response.cookies
-                new_cookie = {
-                    "PHPSESSID": cookies.get("PHPSESSID").value if cookies.get("PHPSESSID") else None,
-                    "user_id": cookies.get("user_id").value if cookies.get("user_id") else None,
-                    "user_name": cookies.get("user_name").value if cookies.get("user_name") else None,
-                }
-                LOGGER.debug(f"Session refreshed: {response_data}, Cookie: {new_cookie}")
-                self.hass.config_entries.async_update_entry(
-                    entry=self.entry,
-                    data={**self.entry.data, self.version: new_cookie},
-                )
-                await asyncio.sleep(1)
-        except Exception as ex:
-            LOGGER.error(f"Exception during session refresh: {type(ex).__name__}: {ex}")
+    async def stop(self):
+        """Stop all running tasks and reset timers."""
+        if self.tasks:
+            for task in self.tasks:
+                task()
+            self.tasks = []
 
     @callback
-    async def enqueue_command(
-        self, device_id: str, value: Any, **kwargs: dict | None
-    ) -> None:
-        """Handle commands to devices based on type and room."""
+    async def enqueue_command(self, device_id: str, value: Any, **kwargs: dict | None):
+        """Enqueue a command for a device."""
         parts = device_id.split("_")
         device_type = parts[1]
         room_id = int(parts[2])
@@ -409,7 +402,7 @@ class BestinCenterAPI(CenterAPIv2):
         if kwargs:
             sub_type, value = next(iter(kwargs.items()))
 
-        if self.version == VERSION_1:
+        if self.version == CONF_VERSION_1:
             pass
         else:
             if device_type == "elevator":
@@ -419,12 +412,12 @@ class BestinCenterAPI(CenterAPIv2):
                 await self.request_feature_command(device_type, room_id, unit_id, value)
 
     def get_devices_from_domain(self, domain: str) -> list:
-        """Retrieve devices associated with a specific domain."""
+        """Get devices for a specific domain."""
         entity_list = self.entity_groups.get(domain, set())
         return [self.devices.get(uid, {}) for uid in entity_list]
 
     def initial_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
-        """Initialize a device and add it to the devices list."""
+        """Initialize a device with given parameters."""
         device_type, device_room = device_id.split("_")
     
         did_suffix = f"_{sub_id}" if sub_id else ""
@@ -455,7 +448,7 @@ class BestinCenterAPI(CenterAPIv2):
             )
             self.devices[device_id] = DeviceProfile(
                 enqueue_command=self.enqueue_command,
-                domain=CTR_DOMAIN_MAP[device_type],
+                domain=DEVICE_PLATFORM_MAP[device_type],
                 unique_id=unique_id,
                 info=device_info,
             )
@@ -463,24 +456,26 @@ class BestinCenterAPI(CenterAPIv2):
 
     def set_device(
         self, device_type: str, device_number: int, unit_id: str | None, status: Any
-    ) -> None:
-        """Set up device with specified state."""
-        if device_type not in CTR_DOMAIN_MAP:
-            raise ValueError(f"Unsupported device type: {device_type}")
+    ):
+        """Set device status and add it if not exists."""
+        if device_type not in DEVICE_PLATFORM_MAP:
+            LOGGER.error(f"Unsupported device type: {device_type}")
+            return
+        
         device_id = f"{device_type}_{device_number}"
         device = self.initial_device(device_id, unit_id, status)
 
         if unit_id and not unit_id.isdigit():
-            letter_unit_id = ''.join(filter(str.isalpha, unit_id))
-            letter_device_type = f"{device_type}:{letter_unit_id}"
-            domain = CTR_DOMAIN_MAP[letter_device_type]
+            letter_uid = ''.join(filter(str.isalpha, unit_id))
+            letter_device = f"{device_type}:{letter_uid}"
+            device_platform = DEVICE_PLATFORM_MAP[letter_device]
         else:
-            domain = CTR_DOMAIN_MAP[device_type]
-
+            device_platform = DEVICE_PLATFORM_MAP[device_type]
+        
         device_uid = device.unique_id
         device_info = device.info
-        if device_uid not in self.entity_groups.get(domain, set()):
-            signal = CTR_SIGNAL_MAP[domain]
+        if device_uid not in self.entity_groups.get(device_platform, []):
+            signal = PLATFORM_SIGNAL_MAP[device_platform]
             self.add_device_callback(signal, device)
 
         if device_info.state != status:
@@ -488,7 +483,7 @@ class BestinCenterAPI(CenterAPIv2):
             device.update_callbacks()
 
     def parse_xml_response(self, response: str) -> str:
-        """Parse XML response."""
+        """Parse XML response and return result."""
         try:
             result = xmltodict.parse(response)
             return result["imap"]["service"][0]["@result"]
@@ -496,19 +491,115 @@ class BestinCenterAPI(CenterAPIv2):
             LOGGER.error(f"XML parsing error: {ex}")
             return None
 
-    def result_after_request(self, response: str | dict) -> str:
-        """Get result after request."""
-        if self.version == "version1.0":
+    def result_after_request(self, response: dict | str) -> str:
+        """Process response after request based on API version."""
+        if self.version == CONF_VERSION_1:
             result_data = self.parse_xml_response(response)
         else:
             result_data = response.get("result", None)
         return result_data
 
+    def _elevator_registration(self, id: str):
+        """Register elevator device."""
+        self.set_device("elevator", 1, id, False)
+        self.set_device("elevator", 1, f"floor_{id}", "")
+        self.set_device("elevator", 1, f"direction_{id}", "IDLE")
+    
+    def _parse_common_status(
+        self, device_type: str, device_number: int, unit_num: str, unit_status: dict | str
+    ):
+        """Parse common status for devices."""
+        if isinstance(unit_status, dict):
+            status_value = unit_status
+        else:
+            status_value = unit_status in ["on", "open"]
+        self.set_device(device_type, device_number, unit_num, status_value)
+
+    def _parse_electric_status(
+        self, device_number: int, unit_num: str, unit_status: str
+    ):
+        """Parse electric device status."""
+        status_parts = unit_status.split("/")
+        for status_key in status_parts:
+            is_cutoff = status_key in ["set", "unset"]
+            conv_unit_num = f"cutoff_{unit_num}" if is_cutoff else unit_num
+            status_value = status_key in ["set", "on"]
+            self.set_device("electric", device_number, conv_unit_num, status_value)
+
+    def _parse_thermostat_status(
+        self, device_number: int, unit_num: str, unit_status: str
+    ):
+        """Parse thermostat status."""
+        status_parts = unit_status.split("/")
+        status_value = {
+            ATTR_HVAC_MODE: HVACMode.HEAT if status_parts[0] == "on" else HVACMode.OFF,
+            SERVICE_SET_TEMPERATURE: float(status_parts[1]),
+            ATTR_CURRENT_TEMPERATURE: float(status_parts[2])
+        }
+        self.set_device("thermostat", unit_num, None, status_value)
+
+    def _parse_ventil_status(
+        self, device_number: int, unit_num: str, unit_status: str
+    ):
+        """Parse ventilation status."""
+        is_off = unit_status == "off"
+        speed_list = [SPEED_STR_LOW, SPEED_STR_MEDIUM, SPEED_STR_HIGH]
+        status_value = {
+            ATTR_STATE: not is_off,
+            WIND_SPEED: unit_status if not is_off else "off",
+            "speed_list": speed_list,
+            ATTR_PRESET_MODE: None,
+        }
+        self.set_device("ventil", device_number, None, status_value)
+
+    async def _v1_device_status(self, args=datetime.now(timezone.utc)):
+        """Update device status for v1 API."""
+        self.last_update_time = args
+        
+        await asyncio.gather(
+            *[self.fetch_device_status("light", i) for i in range(6)],
+            *[self.fetch_device_status("electric", i) for i in range(1, 6)],
+            *[self.fetch_device_status("temper", i) for i in range(1, 6)],
+            self.fetch_device_status("gas"),
+            self.fetch_device_status("ventil"),
+            self.fetch_device_status("doorlock")
+        )
+
+    async def _v1_refresh_session(self, args=datetime.now(timezone.utc)):
+        """Refresh session for v1 API."""
+        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
+        params = {
+            "login_ide": self.entry.data[CONF_USERNAME],
+            "login_pwd": self.entry.data[CONF_PASSWORD]
+        }
+        try:
+            async with self.session.get(url=url, params=params, timeout=5) as response:
+                resp = await response.json(content_type="text/html")
+                if response.status != 200 or "_fair" in resp:
+                    LOGGER.error(f"Session refresh failed: {resp.get('msg', 'Unknown error')}")
+                    return
+
+                cookies = response.cookies
+                new_cookie = {
+                    "PHPSESSID": cookies.get("PHPSESSID").value if cookies.get("PHPSESSID") else None,
+                    "user_id": cookies.get("user_id").value if cookies.get("user_id") else None,
+                    "user_name": cookies.get("user_name").value if cookies.get("user_name") else None,
+                }
+                LOGGER.debug(f"Session refreshed: {resp}, Cookie: {new_cookie}")
+                self.last_sess_refresh = args
+                self.hass.config_entries.async_update_entry(
+                    entry=self.entry,
+                    data={**self.entry.data, CONF_SESSION: new_cookie},
+                )
+                await asyncio.sleep(1)
+        except Exception as ex:
+            LOGGER.error(f"Exception during session refresh: {type(ex).__name__}: {ex}")
+
     async def _v1_fetch_status(
         self, url: str, params: dict, device_type: str, device_number: int
-    ) -> None:
-        """Fetch device status for version 1."""
-        cookies = self.entry.data[self.version]
+    ):
+        """Fetch status for v1 API devices."""
+        cookies = self.entry.data[CONF_SESSION]
         try:
             async with self.session.get(url=url, cookies=cookies, params=params) as response:
                 response.raise_for_status()
@@ -533,132 +624,34 @@ class BestinCenterAPI(CenterAPIv2):
                 ]
                 for unit_num, unit_status in unit_statuses:
                     if device_type in ["light", "livinglight", "gas", "doorlock"]:
-                        self._parse_common_status(
-                            device_type, device_number, unit_num[-1], unit_status
-                        )
+                        self._parse_common_status(device_type, device_number, unit_num[-1], unit_status)
                     if hasattr(self, name := f"_parse_{device_type}_status"):
                         getattr(self, name)(device_number, unit_num[-1], unit_status)
         except Exception as ex:
             LOGGER.error(f"Error getting status for {device_type}: {ex}")
-
-    def _elevator_registration(self, id: str) -> None:
-        """Register an elevator with the given ID."""
-        self.set_device("elevator", 1, id, False)
-        self.set_device("elevator", 1, f"floor_{id}", "대기 층")
-        self.set_device("elevator", 1, f"direction_{id}", "대기")
     
-    def _parse_common_status(
-        self, device_type: str, device_number: int, unit_num: str, unit_status: str | dict
-    ) -> None:
-        if isinstance(unit_status, dict):
-            status_value = unit_status
-        else:
-            status_value = unit_status in ["on", "open"]
-        self.set_device(device_type, device_number, unit_num, status_value)
-
-    def _parse_electric_status(
-        self, device_number: int, unit_num: str, unit_status: str
-    ) -> None:
-        status_parts = unit_status.split("/")
-        for status_key in status_parts:
-            is_cutoff = status_key in ["set", "unset"]
-            conv_unit_num = f"cutoff_{unit_num}" if is_cutoff else unit_num
-            status_value = status_key in ["set", "on"]
-            self.set_device("electric", device_number, conv_unit_num, status_value)
-
-    def _parse_thermostat_status(
-        self, device_number: int, unit_num: str, unit_status: str
-    ) -> None:
-        """Parse thermostat status."""
-        status_parts = unit_status.split("/")
-        status_value = {
-            "hvac_mode": HVACMode.HEAT if status_parts[0] == "on" else HVACMode.OFF,
-            "target_temperature": float(status_parts[1]),
-            "current_temperature": float(status_parts[2])
-        }
-        self.set_device("thermostat", unit_num, None, status_value)
-
-    def _parse_ventil_status(
-        self, device_number: int, unit_num: str, unit_status: str
-    ) -> None:
-        """Parse fan status."""
-        is_off = unit_status == "off"
-        speed_list = [SPEED_STR_LOW, SPEED_STR_MEDIUM, SPEED_STR_HIGH]
-        status_value = {
-            "is_on": not is_off,
-            "speed": unit_status if not is_off else "off",
-            "speed_list": speed_list,
-            "preset_mode": None,
-        }
-        self.set_device("ventil", device_number, None, status_value)
-
-    async def get_light_status(self, device_number: int) -> None:
-        """Get light/livinglight status."""
+    async def fetch_device_status(self, device_type: str, device_number: int = 1):
+        """Fetch status for a specific device type."""
         params = {
-            "req_name": "remote_access_light" 
-            if device_number != 0 else "remote_access_livinglight", 
             "req_action": "status"
         }
-        if device_number != 0:
+        
+        if device_type == "light":
+            params["req_name"] = "remote_access_light" if device_number != 0 else "remote_access_livinglight"
+            if device_number != 0:
+                params["req_dev_num"] = device_number
+        elif device_type == "electric":
+            params["req_name"] = "remote_access_electric"
             params["req_dev_num"] = device_number
+        elif device_type == "temper":
+            params["req_name"] = "remote_access_temper"
+            params["req_unit_num"] = f"room{device_number}"
+        elif device_type == "gas":
+            params["req_name"] = "remote_access_gas"
+        elif device_type == "ventil":
+            params["req_name"] = "remote_access_ventil"
+        elif device_type == "doorlock":
+            params["req_name"] = "remote_access_doorlock"
         
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(
-            url, params, params["req_name"].split("_")[2], device_number
-        )
-
-    async def get_electric_status(self, device_number: int) -> None:
-        """Get electric status."""
-        params = {
-            "req_name": "remote_access_electric",
-            "req_action": "status",
-            "req_dev_num": device_number
-        }
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, "electric", device_number)
-
-    async def get_temper_status(self, device_number: int) -> None:
-        """Get temperature status."""
-        params = {
-            "req_name": "remote_access_temper",
-            "req_action": "status",
-            "req_unit_num": f"room{device_number}"
-        }
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, "temper", device_number)
-
-    async def get_gas_status(self, device_number: int = 1) -> None:
-        """Get gas status."""
-        params = {
-            "req_name": "remote_access_gas",
-            "req_action": "status"
-        }
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, "gas", device_number)
-
-    async def get_ventil_status(self, device_number: int = 1) -> None:
-        """Get fan status."""
-        params = {
-            "req_name": "remote_access_ventil",
-            "req_action": "status"
-        }
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, "ventil", device_number)
-
-    async def get_doorlock_status(self, device_number: int = 1) -> None:
-        """Get door lock status."""
-        params = {
-            "req_name": "remote_access_doorlock",
-            "req_action": "status"
-        }
-        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
-        await self._v1_fetch_status(url, params, "doorlock", device_number)
-
-    async def schedule_session_refresh(self) -> None:
-        """Schedule periodic session refresh."""
-        while True:
-            if self.version == VERSION_1:
-                await self._v1_refresh_session()
-            else:
-                await self._v2_refresh_session()
-            await asyncio.sleep(60 * 55)
+        await self._v1_fetch_status(url, params, device_type, device_number)
