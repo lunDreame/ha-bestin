@@ -89,6 +89,7 @@ class BestinController:
         self.devices: dict[str, DeviceProfile] = {}
         self.queue = AsyncQueue()
         self.tasks: list[asyncio.Task] = []
+        self.timestamp = 0
 
     async def start(self):
         """Start the controller tasks"""
@@ -118,7 +119,11 @@ class BestinController:
     async def send_data(self, packet: bytearray):
         """Send data if the connection is alive"""
         if self.is_alive:
-            await self.connection.send(packet)
+            if self.gateway_type == "Gen2":
+                interval = 0.22
+            else:
+                interval = 0.12
+            await self.connection.send(packet, interval)
 
     def calculate_checksum(self, packet: bytearray) -> int:
         """Calculate the checksum for a packet"""
@@ -291,21 +296,17 @@ class BestinController:
         if len(parts) > 4:
             pos_id = int(parts[4])
             sub_type = parts[3]
-        
-        packet_func = getattr(self, f"make_{device_type}_packet")(
-            0, room_id, pos_id, sub_type, value
-        )
 
         queue_task = {
             "send_retry": 1,
-            "timestamp": 0,
+            "timestamp": self.timestamp,
             "device_type": device_type,
             "room_id": room_id,
             "pos_id": pos_id,
             "sub_type": sub_type,
             "value": value,
-            "command": packet_func,
-            "response": None,
+            "command_packet": None,
+            "acknowledgment": None,
         }
         LOGGER.debug(f"Create queue task: {queue_task}")
         await self.queue.put(queue_task)
@@ -560,31 +561,41 @@ class BestinController:
     def validate_response(self, packet: bytes, queue: dict):
         """Validate the response packet against the queued command"""
         general_gateway = self.gateway_type == "General"
-        command = queue["command"]
-        header_byte = command[1]
+        command_packet = queue["command_packet"]
+        header_byte = command_packet[1]
 
-        offset = 2 if general_gateway and len(command) == 10 else 3
+        offset = 2 if general_gateway and len(command_packet) == 10 else 3
         command_4bit = 0x9 if not general_gateway or header_byte == 0x28 else 0x8
 
-        overview = (command_4bit << 4) | (command[offset] & 0x0F)
+        overview = (command_4bit << 4) | (command_packet[offset] & 0x0F)
         packet_value = packet[offset]
 
         if header_byte == packet[1] and (
             overview == packet_value or packet_value == 0x81
         ):
-            queue["response"] = packet
+            queue["acknowledgment"] = packet
 
     async def send_packet_queue(self, queue: dict):
         """Send a packet from the queue"""
-        command = queue["command"]
-        send_retry = queue["send_retry"]
-        
+        command_packet = getattr(self, f"make_{queue['device_type']}_packet", None)(
+            queue["timestamp"],
+            queue["room_id"],
+            queue["pos_id"],
+            queue["sub_type"],
+            queue["value"]
+        )
+        if command_packet is None:
+            LOGGER.error("No packet maker for device '%s'", queue["device_type"])
+            return
+        queue["command_packet"] = command_packet
+
         LOGGER.info(
             "Sending '%s' to '%s' (Packet: %s, Attempts: %d)",
-            queue["value"], queue["device_type"], command.hex(), send_retry
+            queue["value"], queue["device_type"], queue["command_packet"].hex(), queue["send_retry"]
         )
         queue["send_retry"] += 1
-        await self.send_data(command)
+        queue["timestamp"] += 1
+        await self.send_data(queue["command_packet"])
 
     def handle_device_packet(self, packet: bytes):
         """Handle a device packet"""
@@ -593,10 +604,10 @@ class BestinController:
         command = packet[2] if packet_len == 10 else packet[3]
         room_id = device_state = device_id = None
         
-        #if packet_len >= 20 or packet_len in [7, 8]:
-        #    timestamp = packet[4]
-        #elif packet_len == 10:
-        #    timestamp = packet[3]
+        if packet_len >= 20 or packet_len in [7, 8]:
+            self.timestamp = packet[4]
+        elif packet_len == 10:
+            self.timestamp = packet[3]
 
         if packet_len != 10 and command in [0x81, 0x82, 0x91, 0x92, 0xB2]:
             if header == 0x28:
@@ -635,17 +646,19 @@ class BestinController:
     async def handle_packet_queue(self, queue: dict):
         """Handle a packet from the queue"""
         await self.send_packet_queue(queue)
-        max_send_retry = self.entry.options.get("max_send_retry", DEFAULT_MAX_SEND_RETRY)
+        acknowledgment = queue["acknowledgment"]
+        send_retry = queue["send_retry"]
+        max_retry = self.entry.options.get("max_send_retry", DEFAULT_MAX_SEND_RETRY)
 
-        if response := queue["response"]:
+        if acknowledgment:
             LOGGER.info(
                 "%s: Success (ACK: %s, Attempts: %d)",
-                queue["device_type"], response.hex(), queue["send_retry"]
+                queue["device_type"], acknowledgment.hex(), queue["send_retry"]
             )
             await self.queue.delete()
-        elif queue["send_retry"] > max_send_retry:
+        elif send_retry > max_retry:
             LOGGER.warning(
-                "%s: Failed after %d attempts", queue["device_type"], max_send_retry
+                "%s: Failed after %d attempts", queue["device_type"], max_retry
             )
             await self.queue.delete()
 
@@ -653,7 +666,7 @@ class BestinController:
         """Process incoming data"""
         while True:
             if not self.is_alive:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(5)
                 continue
 
             try:
@@ -688,6 +701,6 @@ class BestinController:
                     queue_item = await self.queue.get()
                     await self.handle_packet_queue(queue_item)
                 else:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(1e-3)
             except Exception as ex:
                 LOGGER.error(f"Failed to process task queue: {ex}", exc_info=True)

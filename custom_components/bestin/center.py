@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 import aiohttp
 import json
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from homeassistant.components.climate.const import (
@@ -37,7 +37,7 @@ from homeassistant.const import (
 from .const import (
     LOGGER,
     BRAND_PREFIX,
-    CONF_VERSION_1,
+    SMART_HOME_1,
     CONF_SESSION,
     DEFAULT_SCAN_INTERVAL,
     SPEED_STR_LOW,
@@ -65,9 +65,10 @@ class CenterAPIv2:
         self.features_list: list[dict] = []
         self.elevator_data: dict[str,  dict] = {}
 
-    async def _v2_device_status(self, args=datetime.now(timezone.utc)):
+    async def _v2_device_status(self, args=None):
         """Update device status for v2 API."""
-        self.last_update_time = args  # 2024-09-29 05:05:58.288861+00:00
+        if isinstance(args, datetime):
+            self.last_update_time = datetime.now()
         
         if self.features_list:
             await self.process_features(self.features_list)
@@ -78,7 +79,7 @@ class CenterAPIv2:
             for i in range(1, self.elevator_number + 1):
                 self._elevator_registration(str(i))
     
-    async def _v2_refresh_session(self, args=datetime.now(timezone.utc)):
+    async def _v2_refresh_session(self, args=None):
         """Refresh session for v2 API."""
         url = "https://center.hdc-smart.com/v3/auth/login"
         headers = {
@@ -99,7 +100,8 @@ class CenterAPIv2:
                     return
 
                 LOGGER.debug(f"Session refreshed: {resp}")
-                self.last_sess_refresh = args
+                if isinstance(args, datetime):
+                    self.last_sess_refresh = datetime.now()
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
                     data={**self.entry.data, CONF_SESSION: resp},
@@ -345,8 +347,8 @@ class BestinCenterAPI(CenterAPIv2):
         
         self.tasks: list[asyncio.Task] = []
         self.devices: dict[str, DeviceProfile] = {}
-        self.last_update_time: datetime = None
-        self.last_sess_refresh: datetime = None
+        self.last_update_time: datetime = datetime.now()
+        self.last_sess_refresh: datetime = datetime.now()
 
     def get_short_hash(self, id: str) -> str:
         """Generate a short hash from the given ID."""
@@ -402,8 +404,13 @@ class BestinCenterAPI(CenterAPIv2):
         if kwargs:
             sub_type, value = next(iter(kwargs.items()))
 
-        if self.version == CONF_VERSION_1:
-            pass
+        if self.version == SMART_HOME_1:
+            if device_type == "doorlock":
+                LOGGER.warning("For doorlock, command is not supported.")
+            else:
+                unit_id = f"{sub_type}{pos_id or room_id}" \
+                    if kwargs else f"{device_type}{pos_id or ''}"
+                await self.request_home_device(device_type, room_id, unit_id, value)
         else:
             if device_type == "elevator":
                 await self.elevator_call_request()
@@ -486,14 +493,14 @@ class BestinCenterAPI(CenterAPIv2):
         """Parse XML response and return result."""
         try:
             result = xmltodict.parse(response)
-            return result["imap"]["service"][0]["@result"]
+            return result["imap"]["service"]["@result"]
         except Exception as ex:
             LOGGER.error(f"XML parsing error: {ex}")
             return None
 
     def result_after_request(self, response: dict | str) -> str:
         """Process response after request based on API version."""
-        if self.version == CONF_VERSION_1:
+        if self.version == SMART_HOME_1:
             result_data = self.parse_xml_response(response)
         else:
             result_data = response.get("result", None)
@@ -524,6 +531,13 @@ class BestinCenterAPI(CenterAPIv2):
             is_cutoff = status_key in ["set", "unset"]
             conv_unit_num = f"cutoff_{unit_num}" if is_cutoff else unit_num
             status_value = status_key in ["set", "on"]
+            if (
+                # Version 1 has one standby power cut-off per room
+                self.version == SMART_HOME_1 
+                and conv_unit_num.startswith("cutoff_")
+                and int(unit_num) > 1
+            ):
+                continue
             self.set_device("electric", device_number, conv_unit_num, status_value)
 
     def _parse_thermostat_status(
@@ -538,6 +552,18 @@ class BestinCenterAPI(CenterAPIv2):
         }
         self.set_device("thermostat", unit_num, None, status_value)
 
+    def _parse_temper_status(
+        self, device_number: int, unit_num: str, unit_status: str
+    ):
+        """Parse temper(thermostat) status."""
+        status_parts = unit_status.split("/")
+        status_value = {
+            ATTR_HVAC_MODE: HVACMode.HEAT if status_parts[0] == "on" else HVACMode.OFF,
+            SERVICE_SET_TEMPERATURE: float(status_parts[1]),
+            ATTR_CURRENT_TEMPERATURE: float(status_parts[2])
+        }
+        self.set_device("temper", unit_num, None, status_value)
+    
     def _parse_ventil_status(
         self, device_number: int, unit_num: str, unit_status: str
     ):
@@ -552,9 +578,10 @@ class BestinCenterAPI(CenterAPIv2):
         }
         self.set_device("ventil", device_number, None, status_value)
 
-    async def _v1_device_status(self, args=datetime.now(timezone.utc)):
+    async def _v1_device_status(self, args=None):
         """Update device status for v1 API."""
-        self.last_update_time = args
+        if isinstance(args, datetime):
+            self.last_update_time = args
         
         await asyncio.gather(
             *[self.fetch_device_status("light", i) for i in range(6)],
@@ -565,7 +592,7 @@ class BestinCenterAPI(CenterAPIv2):
             self.fetch_device_status("doorlock")
         )
 
-    async def _v1_refresh_session(self, args=datetime.now(timezone.utc)):
+    async def _v1_refresh_session(self, args=None):
         """Refresh session for v1 API."""
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/webapp/data/getLoginWebApp.php"
         params = {
@@ -586,7 +613,8 @@ class BestinCenterAPI(CenterAPIv2):
                     "user_name": cookies.get("user_name").value if cookies.get("user_name") else None,
                 }
                 LOGGER.debug(f"Session refreshed: {resp}, Cookie: {new_cookie}")
-                self.last_sess_refresh = args
+                if isinstance(args, datetime):
+                    self.last_sess_refresh = args
                 self.hass.config_entries.async_update_entry(
                     entry=self.entry,
                     data={**self.entry.data, CONF_SESSION: new_cookie},
@@ -655,3 +683,33 @@ class BestinCenterAPI(CenterAPIv2):
         
         url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
         await self._v1_fetch_status(url, params, device_type, device_number)
+    
+    async def request_home_device(
+        self, device_type: str, room_id: int, unit: str, value: str
+    ):
+        """Request a home device."""
+        params = {
+            "req_name": "remote_access_livinglight"
+                if device_type == "light" and room_id == 0 else f"remote_access_{device_type}",
+            "req_action": "control",
+            "req_unit_num": unit,
+            "req_ctrl_action": value,
+        }
+        if device_type not in ["gas", "ventil"]:
+            params["req_dev_num"] = room_id
+
+        url = f"http://{self.entry.data[CONF_IP_ADDRESS]}/mobilehome/data/getHomeDevice.php"
+        cookies = self.entry.data[CONF_SESSION]
+        try:
+            async with self.session.get(url=url, cookies=cookies, params=params) as response:
+                response.raise_for_status()
+                resp = await response.text()
+                result_status = self.result_after_request(resp)
+
+                if response.status == 200 and result_status == "ok":
+                    LOGGER.info(f"{device_type} in room {room_id} set to {unit}={value}.")
+                    await self.fetch_device_status(device_type, room_id)
+                else:
+                    LOGGER.warning(f"Failed to set {device_type} in room {room_id}. Response: {resp}")
+        except Exception as ex:
+            LOGGER.error(f"Error setting {device_type} in room {room_id}: {ex}")

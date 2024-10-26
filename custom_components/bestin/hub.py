@@ -116,12 +116,12 @@ class ConnectionManager:
             self.reconnect_attempts = 0
             self.next_attempt_time = None
 
-    async def send(self, packet: bytearray) -> None:
+    async def send(self, packet: bytearray, interval: int) -> None:
         """Send a packet."""
         try:
             self.writer.write(packet)
             await self.writer.drain()
-            await asyncio.sleep(0.18)
+            await asyncio.sleep(interval)
         except Exception as e:
             LOGGER.error(f"Failed to send packet data: {e}")
             await self.reconnect()
