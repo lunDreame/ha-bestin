@@ -25,7 +25,6 @@ from .const import (
     BRAND_PREFIX,
     PRESET_NV,
     PRESET_NONE,
-    ELEMENT_BYTE_RANGE,
     MAIN_DEVICES,
     DEVICE_PLATFORM_MAP,
     PLATFORM_SIGNAL_MAP,
@@ -35,6 +34,14 @@ from .const import (
     DeviceProfile,
     DeviceInfo,
 )
+
+ENERGY_BYTE_RANGE = {
+    "electric": (slice(8, 12), slice(8, 12)),
+    "gas": (slice(32, 36), slice(25, 29)),
+    "heat": (slice(40, 44), slice(40, 44)),
+    "hotwater": (slice(24, 28), slice(24, 28)),
+    "water": (slice(17, 20), slice(17, 20)),
+}
 
 
 class AsyncQueue:
@@ -200,6 +207,9 @@ class BestinController:
         if aio_gateway:
             room_id_conv = 0x50 + room_id 
             packet = self.make_common_packet(room_id_conv, 0x0C, 0x12, timestamp)
+        elif self.gateway_type == "Gen2":
+            room_id_conv = 0x30 + room_id
+            packet = self.make_common_packet(room_id_conv, 0x09, 0x22, timestamp)
         else:
             packet = self.make_common_packet(0x31, 0x0D, 0x01, timestamp)
             packet[5] = room_id & 0x0F
@@ -208,8 +218,14 @@ class BestinController:
             packet[8] = 0x01
             packet[9] = (pos_id + 1) & 0x0F
             packet[10] = onoff_value >> (onoff_value + 3) if sub_type else onoff_value
+        elif self.gateway_type == "Gen2":
+            packet[5] = 0x01
+            packet[6] = (pos_id + 1) & 0x0F
+            packet[7] = 0x01 if value else 0x02
+            if sub_type == "standbycut":
+                packet[7] *= 0x10
         else:
-            if sub_type == "cutoff":
+            if sub_type == "standbycut":
                 packet[8] = 0x83 if value else 0x03
             else:
                 packet[7] = (0x01 << pos_id) | position_flag
@@ -323,9 +339,8 @@ class BestinController:
         else:
             device_name = f"{device_type} {device_room}".title()
         
-        if device_type != "energy" and sub_id and not sub_id.isdigit():
-            letter_sid = ''.join(filter(str.isalpha, sub_id))
-            device_type = f"{device_type}:{letter_sid}"
+        if device_type not in ["energy"] and sub_id and not sub_id.isdigit():
+            device_type = f"{device_type}:{''.join(filter(str.isalpha, sub_id))}"
         
         if device_type not in MAIN_DEVICES:
             uid_suffix = f"-{self.hub_id}"
@@ -354,17 +369,16 @@ class BestinController:
         device_type, device_room = device_id.split("_")
 
         if device_type not in DEVICE_PLATFORM_MAP:
-            LOGGER.error(f"Unsupported device type: {device_type}")
+            LOGGER.error(f"Unsupported device type '{device_type}' in '{device_room}'")
             return
         
         sub_states = state.items() if is_sub else [(None, state)]
         for sub_id, sub_state in sub_states:
             device = self.initial_device(device_id, sub_id, sub_state)
 
-            if device_type != "energy" and sub_id and not sub_id.isdigit():
-                letter_sid = ''.join(filter(str.isalpha, sub_id))
-                letter_device = f"{device_type}:{letter_sid}"
-                device_platform = DEVICE_PLATFORM_MAP[letter_device]
+            if device_type not in ["energy"] and sub_id and not sub_id.isdigit():
+                format_device = f"{device_type}:{''.join(filter(str.isalpha, sub_id))}"
+                device_platform = DEVICE_PLATFORM_MAP[format_device]
             else:
                 device_platform = DEVICE_PLATFORM_MAP[device_type]
             
@@ -438,7 +452,7 @@ class BestinController:
         }
         return room_id, fan_state
     
-    def parse_state_General(self, packet: bytearray) -> tuple[dict, int]:
+    def parse_state_general(self, packet: bytearray) -> tuple[dict, int]:
         """Parse general state data from a packet"""
         state_general = {"light": {}, "outlet": {}}
         
@@ -458,64 +472,66 @@ class BestinController:
 
             if len(packet) > idx2:
                 value = int.from_bytes(packet[idx:idx2], byteorder="big")
-                consumption = value / 10.
+                power_cons = value / 10.
             else:
-                consumption = 0.
+                power_cons = 0.
+            
+            if i < 2:
+                idx = 8 + 2 * i
+                idx2 = idx + 2
+
+                cut_value = int.from_bytes(packet[idx:idx2], byteorder="big")
+                state_general["outlet"][f"cutvalue_{str(i)}"] = cut_value / 10
 
             outlet_state = bool(packet[7] & (0x01 << i))
-            outlet_cutoff = bool(packet[7] >> 4 & 1)
+            standby_cut = bool(packet[7] >> 4 & 1)
 
             state_general["outlet"][str(i)] = outlet_state
-            state_general["outlet"]["cutoff"] = outlet_cutoff
-            state_general["outlet"][f"consumption_{str(i)}"] = consumption
+            state_general["outlet"]["standbycut"] = standby_cut
+            state_general["outlet"][f"powercons_{str(i)}"] = power_cons
 
         return room_id, state_general
     
-    def parse_state_Gen2(self, packet: bytearray) -> tuple[dict, int]:
+    def parse_state_gen2(self, packet: bytearray) -> tuple[dict, int]:
         """Parse Gen2 state data from a packet"""
         state_gen2 = {"light": {}, "outlet": {}}
-
         room_id = packet[1] & 0x0F
-        if room_id % 2 == 0:
-            lcnt, ocnt = packet[10] & 0x0F, packet[11]
-            base_cnt = ocnt
-        else:
-            lcnt, ocnt = packet[10], packet[11]
-            base_cnt = lcnt
 
-        lsidx = 18
-        osidx = lsidx + (base_cnt * 13)
+        l_count = packet[10] if room_id % 2 else packet[10] & 0x0F
+        o_count = packet[11]
+        base_count = l_count if room_id % 2 else o_count
 
-        for i in range(lcnt):
-            light_state = {
-                ATTR_STATE: packet[lsidx] == 0x01,
-                COLOR_MODE_BRIGHTNESS: packet[lsidx + 1],
-                COLOR_MODE_COLOR_TEMP: packet[lsidx + 2],
-            }
-            if (
-                light_state[COLOR_MODE_BRIGHTNESS] != 0 and
-                light_state[COLOR_MODE_COLOR_TEMP] != 0
-            ):
-                state_gen2["light"][str(i)] = light_state
+        l_idx = 18
+        o_idx = l_idx + (base_count * 13)
 
-            lsidx += 13
+        for i in range(l_count):
+            brightness, color_temp = packet[l_idx + 1], packet[l_idx + 2]
+            dc_value = int.from_bytes(packet[l_idx + 8:l_idx + 10], byteorder="big") / 10
 
-        for i in range(ocnt): 
-            idx = osidx + 8
-            idx2 = osidx + 10
+            if brightness and color_temp:
+                state_gen2["light"][str(i)] = {
+                    ATTR_STATE: packet[l_idx] == 0x01,
+                    COLOR_MODE_BRIGHTNESS: brightness,
+                    COLOR_MODE_COLOR_TEMP: color_temp,
+                }
+                state_gen2["light"][f"dcvalue_{str(i)}"] = dc_value
+            l_idx += 13
 
-            outlet_state = bool(packet[osidx] & 0x01)
-            outlet_cutoff = bool(packet[osidx] & 0x10)
-            outlet_consumption = int.from_bytes(packet[idx:idx2], byteorder="big") / 10
+        for i in range(o_count):
+            outlet_state = bool(packet[o_idx] & 0x01)
+            standby_cut = bool(packet[o_idx] & 0x10)
+            power_cons = int.from_bytes(packet[o_idx + 8:o_idx + 10], byteorder="big") / 10
+            cut_value = int.from_bytes(packet[o_idx + 6:o_idx + 8], byteorder="big") / 10
 
             state_gen2["outlet"][str(i)] = outlet_state
-            state_gen2["outlet"][f"cutoff_{str(i)}"] = outlet_cutoff
-            state_gen2["outlet"][f"consumption_{str(i)}"] = outlet_consumption
-            osidx += 14
-        
+            state_gen2["outlet"][f"standbycut_{str(i)}"] = standby_cut
+            state_gen2["outlet"][f"powercons_{str(i)}"] = power_cons
+            state_gen2["outlet"][f"cutvalue_{str(i)}"] = cut_value
+            o_idx += 14
+
         return room_id, state_gen2
 
-    def parse_state_AIO(self, packet: bytearray) -> tuple[dict, int]:
+    def parse_state_aio(self, packet: bytearray) -> tuple[dict, int]:
         """Parse AIO state data from a packet"""
         state_aio = {"light": {}, "outlet": {}}
         room_id = packet[1] & 0x0F
@@ -529,12 +545,12 @@ class BestinController:
             idx2 = 10 + 5 * i  # consumption
 
             outlet_state = packet[idx] in [0x21, 0x11]
-            outlet_cutoff = packet[idx] in [0x11, 0x13, 0x12]
-            outlet_consumption = (packet[idx2] << 8 | packet[idx2 + 1]) / 10
+            standby_cut = packet[idx] in [0x11, 0x13, 0x12]
+            power_cons = (packet[idx2] << 8 | packet[idx2 + 1]) / 10
 
             state_aio["outlet"][str(i)] = outlet_state
-            state_aio["outlet"][f"cutoff_{str(i)}"] = outlet_cutoff
-            state_aio["outlet"][f"consumption_{str(i)}"] = outlet_consumption
+            state_aio["outlet"][f"standbycut_{str(i)}"] = standby_cut
+            state_aio["outlet"][f"powercons_{str(i)}"] = power_cons
 
         return room_id, state_aio
     
@@ -550,7 +566,7 @@ class BestinController:
             elements = ["electric", "water", "hotwater", "gas", "heat"]
 
         for element in elements:
-            total_value = float(packet[ELEMENT_BYTE_RANGE[element][element_offset]].hex())
+            total_value = float(packet[ENERGY_BYTE_RANGE[element][element_offset]].hex())
             realtime_value = int(packet[index:index + 2].hex())
 
             energy_state[element] = {"total": total_value, "realtime": realtime_value}
@@ -619,7 +635,9 @@ class BestinController:
                 (self.gateway_type == "AIO" and packet_len in [20, 22]) or
                 (self.gateway_type == "Gen2" and packet_len in [59, 72, 98, 150])
             ):
-                room_id, device_state = getattr(self, f"parse_state_{self.gateway_type}")(packet)
+                room_id, device_state = getattr(
+                    self, f"parse_state_{self.gateway_type}".lower()
+                )(packet)
                 for device, state in device_state.items():
                     device_id = f"{device}_{room_id}"
                     self.set_device(device_id, state, is_sub=True)

@@ -435,9 +435,8 @@ class BestinCenterAPI(CenterAPIv2):
         else:
             device_name = f"{device_type} {device_room}".title()
 
-        if device_type != "energy" and sub_id and not sub_id.isdigit():
-            letter_sid = ''.join(filter(str.isalpha, sub_id))
-            device_type = f"{device_type}:{letter_sid}"
+        if sub_id and not sub_id.isdigit():
+            device_type = f"{device_type}:{''.join(filter(str.isalpha, sub_id))}"
         
         if device_type not in MAIN_DEVICES:
             uid_suffix = f"-{self.get_short_hash(self.hub_id)}"
@@ -473,9 +472,8 @@ class BestinCenterAPI(CenterAPIv2):
         device = self.initial_device(device_id, unit_id, status)
 
         if unit_id and not unit_id.isdigit():
-            letter_uid = ''.join(filter(str.isalpha, unit_id))
-            letter_device = f"{device_type}:{letter_uid}"
-            device_platform = DEVICE_PLATFORM_MAP[letter_device]
+            format_device = f"{device_type}:{''.join(filter(str.isalpha, unit_id))}"
+            device_platform = DEVICE_PLATFORM_MAP[format_device]
         else:
             device_platform = DEVICE_PLATFORM_MAP[device_type]
         
@@ -528,13 +526,13 @@ class BestinCenterAPI(CenterAPIv2):
         """Parse electric device status."""
         status_parts = unit_status.split("/")
         for status_key in status_parts:
-            is_cutoff = status_key in ["set", "unset"]
-            conv_unit_num = f"cutoff_{unit_num}" if is_cutoff else unit_num
+            is_set = status_key in ["set", "unset"]
+            conv_unit_num = f"standbycut_{unit_num}" if is_set else unit_num
             status_value = status_key in ["set", "on"]
             if (
                 # Version 1 has one standby power cut-off per room
                 self.version == SMART_HOME_1 
-                and conv_unit_num.startswith("cutoff_")
+                and conv_unit_num.startswith("standbycut_")
                 and int(unit_num) > 1
             ):
                 continue
