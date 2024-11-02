@@ -173,28 +173,28 @@ class CenterAPIv2:
             if len(self.elevator_data) >= 2:
                 for idx, (serial, info) in enumerate(self.elevator_data.items(), start=1):
                     floor = info["Floor"]
-                    move_dir = info["MoveDir"].upper()
+                    move_dir = info["MoveDir"].capitalize()
                     self.elevator_data[f"floor{str(idx)}"] = floor
 
                     self.set_device("elevator", 1, f"floor_{str(idx)}", floor)
                     self.set_device("elevator", 1, f"direction_{str(idx)}", move_dir)
             else:
                 floor = move_info["Floor"]
-                move_dir = move_info["MoveDir"].upper()
+                move_dir = move_info["MoveDir"].capitalize()
                 self.elevator_data[f"floor1"] = floor
                 
                 self.set_device("elevator", 1, "floor_1", floor)
                 self.set_device("elevator", 1, "direction_1", move_dir)
         else:
             for idx in range(1, self.elevator_number + 1):
-                floor = self.elevator_data.get(f"floor{str(idx)}", "UNKNOWN")
+                floor = self.elevator_data.get(f"floor{str(idx)}", "Unknown")
             
                 self.set_device("elevator", 1, f"floor_{str(idx)}", floor)
-                self.set_device("elevator", 1, f"direction_{str(idx)}", "ARRIVAL")
+                self.set_device("elevator", 1, f"direction_{str(idx)}", "Arrival")
                 await asyncio.sleep(2)  # Wait for a while
 
-                self.set_device("elevator", 1, f"floor_{str(idx)}", "")
-                self.set_device("elevator", 1, f"direction_{str(idx)}", "IDLE")
+                self.set_device("elevator", 1, f"floor_{str(idx)}", "-")
+                self.set_device("elevator", 1, f"direction_{str(idx)}", "Idle")
 
             self.elevator_arrived = True
     
@@ -507,8 +507,8 @@ class BestinCenterAPI(CenterAPIv2):
     def _elevator_registration(self, id: str):
         """Register elevator device."""
         self.set_device("elevator", 1, id, False)
-        self.set_device("elevator", 1, f"floor_{id}", "")
-        self.set_device("elevator", 1, f"direction_{id}", "IDLE")
+        self.set_device("elevator", 1, f"floor_{id}", "-")
+        self.set_device("elevator", 1, f"direction_{id}", "Idle")
     
     def _parse_common_status(
         self, device_type: str, device_number: int, unit_num: str, unit_status: dict | str
