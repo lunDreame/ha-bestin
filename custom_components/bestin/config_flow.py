@@ -241,7 +241,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=user_input[CONF_UUID], data=user_input)
 
         data_schema = vol.Schema({
-            vol.Required("elevator_number", default=1): ConfigFlow.int_between(1, 3),
+            vol.Required("elevator_number", default=1): ConfigFlow.int_between(1, 4),
             vol.Optional(CONF_IP_ADDRESS): cv.string,
             vol.Required(CONF_UUID): cv.string,
         })

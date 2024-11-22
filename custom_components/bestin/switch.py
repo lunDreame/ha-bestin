@@ -16,13 +16,13 @@ from .const import CONF_VERSION, NEW_SWITCH
 from .device import BestinDevice
 from .hub import BestinHub
 
-DEVICE_ICON_MAP = {
-    "outlet": "mdi:power-socket-eu",
-    "outlet:cutoff": "mdi:power-socket-eu",
+DEVICE_ICON = {
+    "outlet": "mdi:power-socket",
+    "outlet:standbycut": "mdi:power-sleep",
     "doorlock": "mdi:door-closed",
     "elevator": "mdi:elevator-down",
-    "electric": "mdi:power-socket-eu",
-    "electric:cutoff": "mdi:power-socket-eu",
+    "electric": "mdi:power-socket",
+    "electric:standbycut": "mdi:power-sleep",
     "gas": "mdi:valve",
 }
 
@@ -65,7 +65,7 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     def __init__(self, device, hub: BestinHub):
         """Initialize the switch."""
         super().__init__(device, hub)
-        self._attr_icon = DEVICE_ICON_MAP.get(self._device_info.device_type)
+        self._attr_icon = DEVICE_ICON.get(self._device_info.device_type)
         self._version_exists = getattr(hub.api, CONF_VERSION, False)
 
     @property
@@ -78,7 +78,7 @@ class BestinSwitch(BestinDevice, SwitchEntity):
         if self._version_exists:
             if self._device_info.device_type == "gas":
                 await self.enqueue_command("open")
-            elif self._device_info.device_type == "electric:cutoff":
+            elif self._device_info.device_type == "electric:standbycut":
                 await self.enqueue_command(switch="set")
             else:
                 await self.enqueue_command(switch=STATE_ON)
@@ -90,7 +90,7 @@ class BestinSwitch(BestinDevice, SwitchEntity):
         if self._version_exists:
             if self._device_info.device_type == "gas":
                 await self.enqueue_command("close")
-            elif self._device_info.device_type == "electric:cutoff":
+            elif self._device_info.device_type == "electric:standbycut":
                 await self.enqueue_command(switch="unset")
             else:
                 await self.enqueue_command(switch=STATE_OFF)
