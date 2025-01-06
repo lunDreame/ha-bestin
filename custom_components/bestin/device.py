@@ -41,7 +41,7 @@ class BestinBase:
 
         return DeviceInfo(
             connections={(self.hub.hub_id, self.unique_id)},
-            identifiers={(DOMAIN, f"{self.hub.wp_version}_{formatted_id}")},
+            identifiers={(DOMAIN, f"{self.hub.wp_version}_{formatted_id}_{self.hub.hub_id}")},
             manufacturer="HDC Labs Co., Ltd.",
             model=self.hub.wp_version,
             name=device_name,
