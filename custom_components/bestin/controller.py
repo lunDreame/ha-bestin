@@ -464,7 +464,9 @@ class BestinController:
 
         for i in range(iterations[0]):
             light_state = bool(packet[6] & (0x01 << i))
+            dc_value = int.from_bytes(packet[12:14], 'big') / 10.0
             state_general["light"][str(i)] = light_state
+            state_general["light"][f"dcvalue"] = dc_value
 
         for i in range(iterations[1]): 
             idx = 14 + 2 * i
@@ -719,6 +721,6 @@ class BestinController:
                     queue_item = await self.queue.get()
                     await self.handle_packet_queue(queue_item)
                 else:
-                    await asyncio.sleep(1e-3)
+                    await asyncio.sleep(0.1)
             except Exception as ex:
                 LOGGER.error(f"Failed to process task queue: {ex}", exc_info=True)
