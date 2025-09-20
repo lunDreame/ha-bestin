@@ -3,42 +3,12 @@
     "config": {
         "step": {
             "user": {
-                "description": "If socket or serial communication is ready, press the local button to start. If IPARK Smart Home app is officially supported, additional features are provided through Smart Home integration.",
-                "menu_options": {
-                    "local": "Local Communication Connection",
-                    "center": "IPARK Smart Home Integration"
-                }
-            },
-            "local": {
                 "data": {
-                    "host": "IP address",
+                    "host": "Host",
                     "port": "Port"
                 },
                 "data_description": {
                     "port": "Port can be omitted for serial communication."
-                }
-            },
-            "center": {
-                "description": "Please refer to the [documentation](https://github.com/lunDreame/ha-bestin/blob/main/guide/center.md) for instructions on configuring each section.",
-                "data": {
-                    "version": "Version"
-                }
-            },
-            "center_v1": {
-                "data": {
-                    "ip_address": "IP address",
-                    "username": "Username",
-                    "password": "Password"
-                }
-            },
-            "center_v2": {
-                "data": {
-                    "elevator_number": "Elevator number",
-                    "ip_address": "IP address",
-                    "uuid": "UUID"
-                },
-                "data_description": {
-                    "ip_address": "If elevator integration is required, please enter the IP address of the wall pad in the household."
                 }
             }
         },
@@ -47,21 +17,7 @@
         },
         "error": {
             "connect_failed": "Connection failed.",
-            "login_failed": "Login failed. {err}",
-            "network_error": "A network error has occurred.",
             "unknown": "An unknown error has occurred."
-        }
-    },
-    "options": {
-        "step": {
-            "init": {
-                "title": "Adjust User Options",
-                "data": {
-                    "max_send_retry": "Max Send Retry",
-                    "packet_viewer": "Packet Viewer",
-                    "scan_interval": "Scan Interval (minutes)"
-                }
-            }
         }
     }
 }
