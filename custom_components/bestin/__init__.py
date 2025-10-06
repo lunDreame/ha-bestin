@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, LOGGER, PLATFORMS
+from .const import DOMAIN, PLATFORMS
 from .gateway import BestinGateway
 
 
@@ -37,9 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the BESTIN integration."""
-    if unload_ok := await hass.config_entries.async_unload_platforms(
-        entry, PLATFORMS
-    ):
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         gateway: BestinGateway = hass.data[DOMAIN].pop(entry.entry_id)
         await gateway.async_close()
     

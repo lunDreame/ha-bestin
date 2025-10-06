@@ -1,4 +1,5 @@
-"""Manages the gateway connection and communication."""
+from __future__ import annotations
+
 import re
 import time
 import asyncio
@@ -7,7 +8,7 @@ import serial_asyncio
 from typing import cast, Optional
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PORT, CONF_HOST
+from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, Event, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
@@ -117,10 +118,10 @@ class ConnectionManager:
             LOGGER.error(f"Failed to send packet data: {e}")
             await self.reconnect()
 
-    async def receive(self, size: int = 64) -> bytes | None:
+    async def receive(self, size: int = 256) -> bytes | None:
         """Receive data."""
         try:
-            return await self.reader.read(256)
+            return await self.reader.read(size)
         except asyncio.TimeoutError:
             pass
         except Exception as e:
@@ -138,7 +139,6 @@ class ConnectionManager:
 
 
 class BestinGateway:
-    """Represents a Bestin gateway for managing smart home devices."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the BestinGateway."""
@@ -200,12 +200,11 @@ class BestinGateway:
         self, device_type: str, device=None, force: bool = False
     ) -> None:
         """Add a new device callback."""
-        domain = device.domain
-        unique_id = device.unique_id
-        device_info = device.info
+        platform = device.platform
+        unique_id = device.key.unique_id
         
-        if (unique_id in self.entity_groups.get(domain, set()) or
-            device_info.device_id in self.entity_to_id):
+        if (unique_id in self.entity_groups.get(platform, set()) or
+            unique_id in self.entity_to_id):
             return
         
         args = []

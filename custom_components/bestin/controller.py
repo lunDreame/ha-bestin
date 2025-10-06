@@ -1,57 +1,25 @@
+from __future__ import annotations
+
 import asyncio
 from typing import Any, Callable
 
 from homeassistant.components.climate.const import HVACMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 
 from .const import (
     LOGGER,
     MAIN_DEVICES,
     DEVICE_PLATFORM_MAP,
     PLATFORM_SIGNAL_MAP,
-    DeviceProfile,
-    DeviceInfo,
+    Device,
+    DeviceKey,
+    DeviceType,
+    DeviceSubType,
 )
-
-ENERGY_BYTE_RANGE = {
-    "electric": (slice(8, 12), slice(8, 12)),
-    "gas": (slice(32, 36), slice(25, 29)),
-    "heat": (slice(40, 44), slice(40, 44)),
-    "hotwater": (slice(24, 28), slice(24, 28)),
-    "water": (slice(17, 20), slice(17, 20)),
-}
-
-
-class AsyncQueue:
-    def __init__(self):
-        self.queue = asyncio.Queue()
-
-    async def put(self, item):
-        """Function to put data into the queue"""
-        await self.queue.put(item)
-    
-    async def get(self):
-        """Function to get data from the queue (only retrieve, not delete)"""
-        if not self.queue.empty():
-            item = await self.queue.get()
-            await self.queue.put(item)
-            return item
-        return None
-    
-    async def delete(self):
-        """Function to delete data from the queue"""
-        if not self.queue.empty():
-            return await self.queue.get()
-        return None
-    
-    async def size(self):
-        """Function to return the size of the queue"""
-        return self.queue.qsize()
 
 
 class BestinController:
-    """Controller for managing Bestin devices and communication."""
 
     def __init__(
         self, 
@@ -70,9 +38,8 @@ class BestinController:
         self.connection = connection
         self.add_device_callback = add_device_callback
         
-        self.gen_type = "normal"
-        self.devices: dict[str, DeviceProfile] = {}
-        self.queue = AsyncQueue()
+        self.device_storage: dict[str, Any] = {}
+        self.devices: dict[str, Device] = {}
         self.tasks: list[asyncio.Task] = []
 
     async def start(self):
@@ -81,7 +48,6 @@ class BestinController:
             self.hass.loop.create_task(self.process_incoming_data()),
             self.hass.loop.create_task(self.process_queue_data())
         ]
-        await asyncio.sleep(0.2)
 
     async def stop(self):
         """Stop the controller tasks"""
@@ -124,89 +90,116 @@ class BestinController:
             checksum = (checksum + 1) & 0xFF
         return checksum == packet[-1]
 
-    def get_devices_from_domain(self, domain: str) -> list:
-        """Get devices from a specific domain"""
-        entity_list = self.entity_groups.get(domain, [])
+    def get_devices_from_platform(self, platform: str) -> list:
+        """Get devices from a specific platform"""
+        entity_list = self.entity_groups.get(platform, [])
         return [self.devices.get(uid, {}) for uid in entity_list]
 
-    def make_light_packet(self, room_id: int, pos_id: int, sub_type: str, value: bool | int) -> bytearray:
+    def make_common_packet(self, header: int, length: int, packet_type: int, spin_code: int) -> bytearray:
+        """Create a common packet structure"""
+        packet = bytearray([
+            0x02, 
+            header & 0xFF, 
+            length & 0xFF, 
+            packet_type & 0xFF, 
+            spin_code & 0xFF
+        ])
+        packet.extend(bytearray([0] * (length - 5)))
+        return packet
+    
+    def make_light_packet(self, key: DeviceKey, value: bool | int, name: str | None) -> bytearray:
         """Create a packet for light control"""
-        is_aio = self.gen_type == "aio"
-        onoff_value = 0x01 if value else 0x00
-        onoff_value2 = 0x04 if value else 0x00
-        position_flag = 0x80 if value else 0x00
-        
-        if is_aio:
-            room_id_conv = 0x50 + room_id
-            packet = self.make_common_packet(room_id_conv, 0x0A, 0x12, 0)
-            packet[5] = onoff_value
-            packet[6] = 10 if pos_id == 4 else 1 << pos_id
-        elif self.gen_type == "dimming":
-            room_id_conv = 0x30 + room_id
-            packet = self.make_common_packet(room_id_conv, 0x0E, 0x21, 0)
-            
-            pos_id += 1
-            onoff_value = 0x01 if value else 0x02
-            
-            packet[5:13] = [0x01, 0x00, pos_id, onoff_value, 0xFF, 0xFF, 0x00, 0xFF]
-            if not isinstance(value, bool):
-                packet[8] = 0xFF
-                if sub_type == "brightness":
-                    packet[9] = value
-                else:
-                    packet[10] = value
+        header = self.device_storage.get("lo_header")
+        room   = key.room_index & 0x0F
+        d_idx  = key.device_index & 0x0F
+        is_bool = isinstance(value, bool)
+
+        if header == 0x50:
+            packet = self.make_common_packet(header + room, 0x0A, 0x12, 0)
+        elif header == 0x30:
+            packet = self.make_common_packet(header + room, 0x0E, 0x21, 0)
         else:
             packet = self.make_common_packet(0x31, 0x0D, 0x01, 0)
-            packet[5] = room_id & 0x0F
-            packet[6] = (0x01 << pos_id) | position_flag
-            packet[11] = onoff_value2
+            packet[5] = room
+
+        if header == 0x50:
+            # [5]: on/off 플래그, [6]: 채널 비트(특이 케이스: index==4 -> 10)
+            packet[5] = 0x01 if (value if is_bool else value > 0) else 0x00
+            packet[6] = 10 if d_idx == 4 else (1 << d_idx)
+        elif header == 0x30:
+            # [5:13] = [mode, pad, device#, cmd(1/2), FF, FF, 00, FF]
+            onoff_cmd = 0x01 if (value if is_bool else value > 0) else 0x02
+            packet[5:13] = [0x01, 0x00, (d_idx + 1) & 0x0F, onoff_cmd, 0xFF, 0xFF, 0x00, 0xFF]
+
+            # 밝기/디밍 값 처리 (value가 int인 경우만)
+            if not is_bool:
+                # 원 코드대로: [8]=0xFF 마킹 후 name 에 따라 [9] 또는 [10] 채움
+                packet[8] = 0xFF
+                dim = int(value) & 0xFF
+                if name == "set_brightness":
+                    packet[9] = dim
+                else:
+                    packet[10] = dim
+        else:
+            turn_on = (value if is_bool else value > 0)
+            packet[6]  = ((0x01 << d_idx) | 0x80) if turn_on else 0x00
+            packet[11] = 0x04 if turn_on else 0x00
 
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
-    def make_outlet_packet(self, room_id: int, pos_id: int, sub_type: str | None, value: bool) -> bytearray:
+    def make_outlet_packet(self, key: DeviceKey, value: bool) -> bytearray:
         """Create a packet for outlet control"""
-        is_aio = self.gen_type == "aio"
-        onoff_value = 0x01 if value else 0x02
-        onoff_value2 = (0x09 << pos_id) if value else 0x00
-        position_flag = 0x80 if value else 0x00
+        header = self.device_storage.get("lo_header")
+        room = key.room_index & 0x0F
+        dev_idx_1based = (key.device_index + 1) & 0x0F
+        base_cmd = 0x01 if value else 0x02
 
-        if is_aio:
-            room_id_conv = 0x50 + room_id 
-            packet = self.make_common_packet(room_id_conv, 0x0C, 0x12, 0)
-        elif self.gen_type == "dimming":
-            room_id_conv = 0x30 + room_id
-            packet = self.make_common_packet(room_id_conv, 0x09, 0x22, 0)
+        if header == 0x50:
+            packet = self.make_common_packet(header + room, 0x0C, 0x12, 0)
+        elif header == 0x30:
+            packet = self.make_common_packet(header + room, 0x09, 0x22, 0)
         else:
             packet = self.make_common_packet(0x31, 0x0D, 0x01, 0)
-            packet[5] = room_id & 0x0F
+            packet[5] = room
 
-        if is_aio:
+        if header == 0x50:
+            # format: [8]=1, [9]=device#, [10]=cmd (서브타입 처리 포함)
             packet[8] = 0x01
-            packet[9] = (pos_id + 1) & 0x0F
-            packet[10] = onoff_value >> (onoff_value + 3) if sub_type else onoff_value
-        elif self.gen_type == "dimming":
+            packet[9] = dev_idx_1based
+            cmd = base_cmd
+            if key.sub_type != DeviceSubType.NONE:
+                cmd <<= 4
+            packet[10] = cmd
+        elif header == 0x30:
+            # format: [5]=1, [6]=device#, [7]=cmd (STANDBY_CUTOFF이면 상위 니블)
             packet[5] = 0x01
-            packet[6] = (pos_id + 1) & 0x0F
-            packet[7] = 0x01 if value else 0x02
-            if sub_type == "sc":
-                packet[7] *= 0x10
+            packet[6] = dev_idx_1based
+            cmd = base_cmd
+            if key.sub_type == DeviceSubType.STANDBY_CUTOFF:
+                cmd <<= 4  # 0x01 -> 0x10, 0x02 -> 0x20
+            packet[7] = cmd
         else:
-            if sub_type == "sc":
+            if key.sub_type == DeviceSubType.STANDBY_CUTOFF:
+                # 0x83(ON)/0x03(OFF)
                 packet[8] = 0x83 if value else 0x03
             else:
-                packet[7] = (0x01 << pos_id) | position_flag
-                packet[11] = onoff_value2
+                if value:
+                    packet[7]  = (0x01 << key.device_index) | 0x80
+                    packet[11] = (0x09 << key.device_index)
+                else:
+                    packet[7]  = 0x00
+                    packet[11] = 0x00
 
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
-    def make_thermostat_packet(self, room_id: int, pos_id: int, sub_type: str, value: bool | float) -> bytearray:
+    def make_thermostat_packet(self, key: DeviceKey, value: bool | float, name: str | None) -> bytearray:
         """Create a packet for thermostat control"""
         packet = self.make_common_packet(0x28, 14, 0x12, 0)
-        packet[5] = room_id & 0x0F
+        packet[5] = key.room_index & 0x0F
         
-        if sub_type == "set_temperature":
+        if name == "set_temperature":
             value_int = int(value)
             value_float = value - value_int
             packet[7] = value_int & 0xFF
@@ -218,25 +211,31 @@ class BestinController:
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
-    def make_gas_packet(self, room_id: int, pos_id: int, sub_type: str, value: bool) -> bytearray:
-        """Create a packet for gas control"""
+    def make_gasvalve_packet(self, key: DeviceKey, value: bool) -> bytearray | None:
+        """Create a packet for gas valve control"""
+        if value == True:
+            # only control closed
+            return None
         packet = bytearray([0x02, 0x31, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
-    def make_doorlock_packet(self, room_id: int, pos_id: int, sub_type: str, value: bool) -> bytearray:
+    def make_doorlock_packet(self, key: DeviceKey, value: bool) -> bytearray | None:
         """Create a packet for doorlock control"""
+        if value == False:
+            # only control open
+            return None
         packet = bytearray([0x02, 0x41, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00])
         packet[-1] = self.calculate_checksum(packet)
         return packet
 
-    def make_fan_packet(self, room_id: int, pos_id: int, sub_type: str, value: bool | int) -> bytearray:
-        """Create a packet for fan control"""
+    def make_ventilation_packet(self, key: DeviceKey, value: bool | int, name: str | None) -> bytearray:
+        """Create a packet for ventilation control"""
         packet = bytearray([0x02, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-        if sub_type == "set_percentage":
+        if name == "set_percentage":
             packet[2] = 0x03
             packet[6] = value
-        elif sub_type == "preset_mode":
+        elif name == "preset_mode":
             packet[2] = 0x07
             packet[5] = 0x10 if value else 0x00
         else:
@@ -247,36 +246,30 @@ class BestinController:
         packet[-1] = self.calculate_checksum(packet)
         return packet
     
-    @callback
-    async def enqueue_command(self, device_id: str, value: Any, **kwargs: dict | None):
-        """Enqueue a command for a device"""
-        parts = device_id.split("_")
-        device_type = parts[1]
-        room_id = int(parts[2])
-        pos_id = 0
-        sub_type = None
+    async def send_command(self, key: DeviceKey, value: Any, name: str | None):
+        """Send a command to a device"""
+        device_type = key.device_type
         
-        if kwargs:
-            sub_type, value = next(iter(kwargs.items()))
-        if len(parts) == 4 and not parts[3].isdigit():
-            sub_type = parts[3]
-        elif len(parts) == 4 and parts[3].isdigit():
-            pos_id = int(parts[3])
-        if len(parts) > 4:
-            pos_id = int(parts[4])
-            sub_type = parts[3]
-
-        queue_task = {
-            "transmit": 1,
-            "device_type": device_type,
-            "room_id": room_id,
-            "pos_id": pos_id,
-            "sub_type": sub_type,
-            "value": value,
-            "packet": None,
-        }
-        LOGGER.debug(f"Create queue task: {queue_task}")
-        await self.queue.put(queue_task)
+        if device_type == DeviceType.LIGHT:
+            packet = self.make_light_packet(key, value, name)
+        elif device_type == DeviceType.OUTLET:
+            packet = self.make_outlet_packet(key, value)
+        elif device_type == DeviceType.THERMOSTAT:
+            packet = self.make_thermostat_packet(key, value, name)
+        elif device_type == DeviceType.GASVALVE:
+            packet = self.make_gasvalve_packet(key, value)
+        elif device_type == DeviceType.DOORLOCK:
+            packet = self.make_doorlock_packet(key, value)
+        elif device_type == DeviceType.VENTILATION:
+            packet = self.make_ventilation_packet(key, value, name)
+        else:
+            LOGGER.error(f"Faild to make packet caused by unsupported device type '{device_type}'")
+            return
+        
+        if packet is None:
+            return
+        
+        await self.send_data(packet)
     
     def initial_device(self, device_id: str, sub_id: str | None, state: Any) -> dict:
         """Initialize a device"""
@@ -343,77 +336,89 @@ class BestinController:
                 device_info.state = sub_state
                 device.update_callbacks()
 
-    def make_common_packet(self, header: int, length: int, packet_type: int, spin_code: int) -> bytearray:
-        """Create a common packet structure"""
-        packet = bytearray([
-            0x02, 
-            header & 0xFF, 
-            length & 0xFF, 
-            packet_type & 0xFF, 
-            spin_code & 0xFF
-        ])
-        packet.extend(bytearray([0] * (length - 5)))
-        return packet
-
-    def parse_thermostat(self, packet: bytearray) -> tuple[dict, int]:
+    def parse_thermostat(self, packet: bytearray) -> dict:
         """Parse thermostat data from a packet"""
-        room_id = packet[5] & 0x0F
-        is_heating = bool(packet[6] & 0x01)
+        is_on = packet[6] & 0x01
+        hvac_mode = HVACMode.HEAT if is_on else HVACMode.OFF
         target_temperature = (packet[7] & 0x3F) + (packet[7] & 0x40 > 0) * 0.5
         current_temperature = int.from_bytes(packet[8:10], byteorder="big") / 10.0
-        hvac_mode = HVACMode.HEAT if is_heating else HVACMode.OFF
 
-        thermostat_state = {
-            "hvac_mode": hvac_mode,
-            "set_temperature": target_temperature,
-            "current_temperature": current_temperature
+        return {
+            "device_type": DeviceType.THERMOSTAT,
+            "room_id": packet[5] & 0x0F,
+            "device_index": 1,
+            "state": {
+                "hvac_mode": hvac_mode,
+                "set_temperature": target_temperature,
+                "current_temperature": current_temperature
+            }
         }
-        return room_id, thermostat_state
     
-    def parse_gas(self, packet: bytearray) -> tuple[int, bool]:
+    def parse_gas(self, packet: bytearray) -> dict:
         """Parse gas data from a packet"""
-        room_id = 0
-        gas_state = bool(packet[5])
-        return room_id, gas_state
-    
-    def parse_doorlock(self, packet: bytearray) -> tuple[bool, int]:
-        """Parse doorlock data from a packet"""
-        room_id = 0
-        doorlock_state = bool(packet[5] & 0xAE)
-        return room_id, doorlock_state
-    
-    def parse_fan(self, packet: bytearray) -> tuple[dict, int]:
-        """Parse fan data from a packet"""
-        room_id = 0
-        is_natural_ventilation = bool(packet[5] >> 4 & 1)
-        preset_mode	= "natural" if is_natural_ventilation else "none"
-
-        fan_state = {
-            "state": bool(packet[5] & 0x01),
-            "speed": packet[6],
-            "speed_list": [1, 2, 3],
-            "preset_modes": ["natural", "none"],
-            "preset_mode": preset_mode,
+        return {
+            "device_type": DeviceType.GASVALVE,
+            "room_id": 0,
+            "device_index": 1,
+            "state": packet[5]
         }
-        return room_id, fan_state
     
-    def parse_state_normal(self, packet: bytearray) -> tuple[dict, int]:
-        """Parse normal state data from a packet"""
-        state_normal = {"light": {}, "outlet": {}}
+    def parse_doorlock(self, packet: bytearray) -> dict:
+        """Parse doorlock data from a packet"""
+        return {
+            "device_type": DeviceType.DOORLOCK,
+            "room_id": 0,
+            "device_index": 1,
+            "state": packet[5] & 0xAE
+        }
+    
+    def parse_ventilation(self, packet: bytearray) -> dict:
+        """Parse ventilation data from a packet"""
+        is_natural_ventilation = packet[5] >> 4 & 1
+        preset_mode	= "natural" if is_natural_ventilation else "none"
+        return {
+            "device_type": DeviceType.VENTILATION,
+            "room_id": 0,
+            "device_index": 1,
+            "state": {
+                "is_on": packet[5] & 0x01,
+                "speed": packet[6],
+                "preset_mode": preset_mode,
+            },
+            "attributes": {
+                "speed_list": [1, 2, 3],
+                "preset_modes": ["natural", "none"],
+            }
+        }
+    
+    def parse_state_light(self, packet: bytearray) -> dict:
+        """Parse light state data from a packet"""
+        result = {"devices": []}
         
         room_id = packet[5] & 0x0F
         if room_id == 1:
-            iterations = (4, 3)
+            light_cnt, outlet_cnt = 4, 3
         else:
-            iterations = (2, 2)
+            light_cnt, outlet_cnt = 2, 2
 
-        for i in range(iterations[0]):
+        for i in range(light_cnt):
             light_state = bool(packet[6] & (0x01 << i))
             power = int.from_bytes(packet[12:14], 'big') / 10.0
-            state_normal["light"][str(i)] = light_state
-            state_normal["light"]["pu"] = power
+            result["devices"].append({
+                "device_type": DeviceType.LIGHT,
+                "room_id": room_id,
+                "device_index": i,
+                "state": light_state,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.LIGHT,
+                "room_id": room_id,
+                "device_index": i,
+                "state": power,
+                "sub_type": DeviceSubType.POWER_USAGE,
+            })
 
-        for i in range(iterations[1]): 
+        for i in range(outlet_cnt): 
             idx = 14 + 2 * i
             idx2 = idx + 2
 
@@ -427,127 +432,173 @@ class BestinController:
                 idx = 8 + 2 * i
                 idx2 = idx + 2
 
-                cv = int.from_bytes(packet[idx:idx2], byteorder="big")
-                state_normal["outlet"][f"cv_{str(i)}"] = cv / 10
+                cutoff_value = int.from_bytes(packet[idx:idx2], byteorder="big") / 10
+                result["devices"].append({
+                    "device_type": DeviceType.OUTLET,
+                    "room_id": room_id,
+                    "device_index": i,
+                    "state": cutoff_value,
+                    "sub_type": DeviceSubType.CUTOFF_VALUE,
+                })
 
-            outlet_state = bool(packet[7] & (0x01 << i))
-            sc = bool(packet[7] >> 4 & 1)
+            state = bool(packet[7] & (0x01 << i))
+            standby_cutoff = bool(packet[7] >> 4 & 1)
 
-            state_normal["outlet"][str(i)] = outlet_state
-            state_normal["outlet"]["sc"] = sc
-            state_normal["outlet"][f"pu_{str(i)}"] = power
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": state,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": standby_cutoff,
+                "sub_type": DeviceSubType.STANDBY_CUTOFF,
+            })
 
-        return room_id, state_normal
-    
-    def parse_state_dimming(self, packet: bytearray) -> tuple[dict, int]:
-        """Parse dimming state data from a packet"""
-        state_dimming = {"light": {}, "outlet": {}}
+        return result
+        
+    def parse_state_dimming(self, packet: bytearray) -> dict:
+        """Parse dimming light state data from a packet"""
+        result = {"devices": []}
+        
         room_id = packet[1] & 0x0F
+        if room_id % 2:
+            light_cnt = packet[10]
+            outlet_cnt = packet[11]
+            base_count = light_cnt
+        else:
+            light_cnt = packet[10] & 0x0F
+            outlet_cnt = packet[11]
+            base_count = outlet_cnt
 
-        l_count = packet[10] if room_id % 2 else packet[10] & 0x0F
-        o_count = packet[11]
-        base_count = l_count if room_id % 2 else o_count
+        light_idx = 18
+        outlet_idx = light_idx + (base_count * 13)
 
-        l_idx = 18
-        o_idx = l_idx + (base_count * 13)
+        for i in range(light_cnt):
+            brightness, color_temp = packet[light_idx + 1], packet[light_idx + 2]
+            power = int.from_bytes(packet[light_idx + 8:light_idx + 10], byteorder="big") / 10
+            
+            device_type = DeviceType.LIGHT
+            state = {
+                "is_on": packet[light_idx] == 0x01,
+            }
+            if brightness > 0:
+                device_type = DeviceType.DIMMINGLIGHT
+                state["brightness"] = brightness
+            if color_temp > 0:
+                device_type = DeviceType.DIMMINGLIGHT
+                state["color_temp"] = color_temp
+            
+            result["devices"].append({
+                "device_type": device_type,
+                "room_id": room_id,
+                "device_index": i,
+                "state": state,
+            })
+            result["devices"].append({
+                "device_type": device_type,
+                "room_id": room_id,
+                "device_index": i,
+                "state": power,
+                "sub_type": DeviceSubType.POWER_USAGE,
+            })
 
-        for i in range(l_count):
-            brightness, color_temp = packet[l_idx + 1], packet[l_idx + 2]
-            power = int.from_bytes(packet[l_idx + 8:l_idx + 10], byteorder="big") / 10
+            light_idx += 13
 
-            if brightness and color_temp:
-                state_dimming["light"][str(i)] = {
-                    "state": packet[l_idx] == 0x01,
-                    "brightness": brightness,
-                    "color_temp": color_temp,
-                }
-                state_dimming["light"][f"pu_{str(i)}"] = power
-            l_idx += 13
+        for i in range(outlet_cnt):
+            outlet_state = packet[outlet_idx] & 0x01
+            standby_cutoff = packet[outlet_idx] & 0x10
+            cutoff_value = int.from_bytes(packet[outlet_idx + 6:outlet_idx + 8], byteorder="big") / 10
+            power = int.from_bytes(packet[outlet_idx + 8:outlet_idx + 10], byteorder="big") / 10
 
-        for i in range(o_count):
-            outlet_state = bool(packet[o_idx] & 0x01)
-            sc = bool(packet[o_idx] & 0x10)
-            power = int.from_bytes(packet[o_idx + 8:o_idx + 10], byteorder="big") / 10
-            cv = int.from_bytes(packet[o_idx + 6:o_idx + 8], byteorder="big") / 10
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": outlet_state,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": standby_cutoff,
+                "sub_type": DeviceSubType.STANDBY_CUTOFF,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": cutoff_value,
+                "sub_type": DeviceSubType.CUTOFF_VALUE,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": power,
+                "sub_type": DeviceSubType.POWER_USAGE,
+            })
+            outlet_idx += 14
 
-            state_dimming["outlet"][str(i)] = outlet_state
-            state_dimming["outlet"][f"sc_{str(i)}"] = sc
-            state_dimming["outlet"][f"pu_{str(i)}"] = power
-            state_dimming["outlet"][f"cv_{str(i)}"] = cv
-            o_idx += 14
+        return result
 
-        return room_id, state_dimming
-
-    def parse_state_aio(self, packet: bytearray) -> tuple[dict, int]:
-        """Parse AIO state data from a packet"""
-        state_aio = {"light": {}, "outlet": {}}
+    def parse_state_aio(self, packet: bytearray) -> dict:
+        """Parse AIO light and outlet state data from a packet"""
+        result = {"devices": []}
         room_id = packet[1] & 0x0F
 
         for i in range(packet[5]):
             light_state = bool(packet[6] & (1 << i))
-            state_aio["light"][str(i)] = light_state
+            result["devices"].append({
+                "device_type": DeviceType.LIGHT,
+                "room_id": room_id,
+                "device_index": i,
+                "state": light_state,
+            })
 
         for i in range(2):
             idx = 9 + 5 * i    # state
-            idx2 = 10 + 5 * i  # consumption
+            idx2 = 10 + 5 * i  # power usage
 
             outlet_state = packet[idx] in [0x21, 0x11]
-            sc = packet[idx] in [0x11, 0x13, 0x12]
+            standby_cutoff = packet[idx] in [0x11, 0x13, 0x12]
             power = (packet[idx2] << 8 | packet[idx2 + 1]) / 10
 
-            state_aio["outlet"][str(i)] = outlet_state
-            state_aio["outlet"][f"sc_{str(i)}"] = sc
-            state_aio["outlet"][f"pu_{str(i)}"] = power
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": outlet_state,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": standby_cutoff,
+                "sub_type": DeviceSubType.STANDBY_CUTOFF,
+            })
+            result["devices"].append({
+                "device_type": DeviceType.OUTLET,
+                "room_id": room_id,
+                "device_index": i,
+                "state": power,
+                "sub_type": DeviceSubType.POWER_USAGE,
+            })
 
-        return room_id, state_aio
+        return result
     
     def parse_energy(self, packet: bytearray) -> dict:
         """Parse energy data from a packet"""
-        index = 13
-        energy_state = {}
-        element_offset = 1 if self.gen_type == "aio" or len(packet) == 34 else 0
-
-        if element_offset == 1:
-            elements = ["electric", "water", "gas"] 
-        else:
-            elements = ["electric", "water", "hotwater", "gas", "heat"]
-
-        for element in elements:
-            total_value = float(packet[ENERGY_BYTE_RANGE[element][element_offset]].hex())
-            realtime_value = int(packet[index:index + 2].hex())
-
-            energy_state[element] = {"tl": total_value, "rt": realtime_value}
-            index += 8
-
-        return energy_state
-
-    async def send_packet_queue(self, queue: dict):
-        """Send a packet from the queue"""
-        packet = getattr(self, f"make_{queue['device_type']}_packet", None)(
-            queue["room_id"],
-            queue["pos_id"],
-            queue["sub_type"],
-            queue["value"]
-        )
-        if packet is None:
-            LOGGER.error("No packet maker for device '%s'", queue["device_type"])
-            return
-        queue["packet"] = packet
-
-        LOGGER.info(
-            "Sending '%s' to '%s' (Packet: %s, Attempts: %d)",
-            queue["value"], queue["device_type"], queue["packet"].hex(), queue["transmit"]
-        )
-        queue["transmit"] += 1
-        await self.send_data(queue["packet"])
 
     def handle_device_packet(self, packet: bytes):
         """Handle a device packet"""
+        
 
-    
     async def handle_packet_queue(self, queue: dict):
         """Handle a packet from the queue"""
-
 
     async def process_incoming_data(self):
         """Process incoming data"""
@@ -567,15 +618,10 @@ class BestinController:
             except Exception as ex:
                 LOGGER.error(f"Failed to process incoming data: {ex}", exc_info=True)
 
-
     async def process_queue_data(self):
         """Process data in the queue"""
         while True:
             try:
-                if await self.queue.size() > 0:
-                    queue_item = await self.queue.get()
-                    await self.handle_packet_queue(queue_item)
-                else:
-                    await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
             except Exception as ex:
                 LOGGER.error(f"Failed to process task queue: {ex}", exc_info=True)

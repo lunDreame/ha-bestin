@@ -7,37 +7,39 @@ from typing import Any
 from homeassistant.helpers.entity import Entity, DeviceInfo
 from homeassistant.core import callback
 
-from .const import DOMAIN, MAIN_DEVICES
+from .const import DOMAIN, MAIN_DEVICES, DeviceSubType
 
 
 class BestinBase:
     """Base class for BESTIN devices."""
 
-    def __init__(self, device, gateway):
+    def __init__(self, gateway, device):
         """Initialize device and gateway."""
-        self._device = device
-        self._device_info = device.info
         self.gateway = gateway
+        self._device = device
     
-    async def enqueue_command(self, data: Any = None, **kwargs):
+    async def send_command(self, value: Any, name: str | None = None):
         """Send commands to the device."""
-        await self._device.enqueue_command(self._device_info.device_id, data, **kwargs)
+        await self.gateway.send_command(self._device.key, value, name)
     
     @property
     def unique_id(self) -> str:
         """Get unique device ID."""
-        return self._device.unique_id
+        return f"{self._device.key.unique_id}:{self.gateway.host}"
 
     @property
     def device_info(self) -> DeviceInfo:
         """Get device registry information."""
-        if self._device_info.device_type in MAIN_DEVICES:
+        if self._device.key.sub_type != DeviceSubType.NONE:
+            device_filter_format = {self._device.key.device_type, self._device.key.sub_type}
+        else:
+            device_filter_format = self._device.key.device_type
+
+        if device_filter_format in MAIN_DEVICES:
             device_name = "BESTIN"
         else:
-            if ":" in self._device_info.device_type:
-                device_name = f"BESTIN {self._device_info.device_type.split(':')[0].upper()}"
-            else:
-                device_name = f"BESTIN {self._device_info.device_type.upper()}"
+            device_name = f"BESTIN {self._device.key.device_type.name}"
+
         return DeviceInfo(
             connections={(self.gateway.host, self.unique_id)},
             identifiers={(DOMAIN, device_name)},
@@ -54,12 +56,11 @@ class BestinDevice(BestinBase, Entity):
 
     TYPE = ""
 
-    def __init__(self, device, gateway):
+    def __init__(self, gateway, device):
         """Initialize device and update callbacks."""
-        super().__init__(device, gateway)
+        super().__init__(gateway, device)
         self.gateway.entity_groups[self.TYPE].add(self.unique_id)
         self._attr_has_entity_name = True
-        self._attr_name = self._device_info.name
 
     @property
     def entity_registry_enabled_default(self):
@@ -69,7 +70,7 @@ class BestinDevice(BestinBase, Entity):
     async def async_added_to_hass(self):
         """Subscribe to device events upon addition to HASS."""
         self._device.add_callback(self.async_update_callback)
-        self.gateway.entity_to_id[self.entity_id] = self._device_info.device_id
+        self.gateway.entity_to_id[self.entity_id] = self._device.key.unique_id
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -81,7 +82,6 @@ class BestinDevice(BestinBase, Entity):
     @callback
     def async_restore_last_state(self, last_state) -> None:
         """Restore the last known state (not implemented)."""
-        pass
 
     @callback
     def async_update_callback(self):
@@ -103,7 +103,7 @@ class BestinDevice(BestinBase, Entity):
         """Get additional state attributes."""
         attributes = {
             "unique_id": self.unique_id,
-            "device_room": self._device_info.room,
-            "device_type": self._device_info.device_type,
+            "device_room": self._device.key.room_index,
+            "device_type": self._device.key.device_type.name.lower(),
         }
         return attributes
