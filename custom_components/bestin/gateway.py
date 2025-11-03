@@ -54,27 +54,18 @@ class ConnectionManager:
         """Establish a connection."""
         try:
             if self.is_serial:
-                await self._connect_serial()
+                self.reader, self.writer = await serial_asyncio.open_serial_connection(
+                    url=self.conn_str, baudrate=9600
+                )
+                LOGGER.info("Serial connection established on %s", self.conn_str)
             elif self.is_socket:
-                await self._connect_socket()
+                host, port = self.conn_str.split(":")
+                self.reader, self.writer = await asyncio.open_connection(host, int(port))
+                LOGGER.info("Socket connection established to %s:%s", host, port)
             self.reconnect_attempts = 0
-            LOGGER.info("Connection established successfully.")
         except Exception as e:
-            LOGGER.error(f"Connection failed: {e}")
+            LOGGER.error("Connection failed: %s", e)
             await self.reconnect()
-
-    async def _connect_serial(self) -> None:
-        """Establish a serial connection."""
-        self.reader, self.writer = await serial_asyncio.open_serial_connection(
-            url=self.conn_str, baudrate=9600
-        )
-        LOGGER.info(f"Serial connection established on {self.conn_str}")
-
-    async def _connect_socket(self) -> None:
-        """Establish a socket connection."""
-        host, port = self.conn_str.split(":")
-        self.reader, self.writer = await asyncio.open_connection(host, int(port))
-        LOGGER.info(f"Socket connection established to {host}:{port}")
 
     def is_connected(self) -> bool:
         """Check if the connection is active."""
@@ -88,7 +79,7 @@ class ConnectionManager:
 
     async def reconnect(self) -> bool | None:
         """Attempt to reconnect with exponential backoff."""
-        if self.writer is not None:
+        if self.writer:
             self.writer.close()
             await self.writer.wait_closed()
 
@@ -100,12 +91,12 @@ class ConnectionManager:
         delay = min(2 ** self.reconnect_attempts, 60) if self.last_reconnect_attempt else 1
         self.last_reconnect_attempt = current_time
         self.next_attempt_time = current_time + delay
-        LOGGER.info(f"Reconnection attempt {self.reconnect_attempts} after {delay} seconds delay...")
+        LOGGER.info("Reconnection attempt %d after %ds delay...", self.reconnect_attempts, delay)
 
         await asyncio.sleep(delay)
         await self.connect()
         if self.is_connected():
-            LOGGER.info(f"Successfully reconnected on attempt {self.reconnect_attempts}.")
+            LOGGER.info("Reconnected on attempt %d", self.reconnect_attempts)
             self.reconnect_attempts = 0
             self.next_attempt_time = None
 
@@ -115,7 +106,7 @@ class ConnectionManager:
             self.writer.write(packet)
             await self.writer.drain()
         except Exception as e:
-            LOGGER.error(f"Failed to send packet data: {e}")
+            LOGGER.error("Failed to send: %s", e)
             await self.reconnect()
 
     async def receive(self, size: int = 256) -> bytes | None:
@@ -125,17 +116,17 @@ class ConnectionManager:
         except asyncio.TimeoutError:
             pass
         except Exception as e:
-            LOGGER.error(f"Failed to receive packet data: {e}")
+            LOGGER.error("Failed to receive: %s", e)
             await self.reconnect()
             return None
 
     async def close(self) -> None:
         """Close the connection."""
         if self.writer:
-            LOGGER.info("Connection closed.")
             self.writer.close()
             await self.writer.wait_closed()
             self.writer = None
+            LOGGER.info("Connection closed")
 
 
 class BestinGateway:
@@ -150,7 +141,7 @@ class BestinGateway:
         self.entity_to_id: dict[str, str] = {}
 
     @staticmethod
-    def get_gateway(hass: HomeAssistant, entry: ConfigEntry) -> BestinController:
+    def get_gateway(hass: HomeAssistant, entry: ConfigEntry) -> BestinGateway:
         """Get the gateway instance."""
         return hass.data[DOMAIN][entry.entry_id]
 
@@ -184,44 +175,15 @@ class BestinGateway:
         return host
 
     @callback
-    def async_signal_new_device(self, device_type: str) -> str:
-        """Generate a signal for a new device."""
-        new_device = {
-            NEW_CLIMATE: "bestin_new_climate",
-            NEW_FAN: "bestin_new_fan",
-            NEW_LIGHT: "bestin_new_light",
-            NEW_SENSOR: "bestin_new_sensor",
-            NEW_SWITCH: "bestin_new_switch",
-        }
-        return f"{new_device[device_type]}_{self.host}"
-
-    @callback
-    def async_add_device_callback(
-        self, device_type: str, device=None, force: bool = False
-    ) -> None:
-        """Add a new device callback."""
-        platform = device.platform
-        unique_id = device.key.unique_id
-        
-        if (unique_id in self.entity_groups.get(platform, set()) or
-            unique_id in self.entity_to_id):
-            return
-        
-        args = []
-        if device is not None and not isinstance(device, list):
-            args.append([device])
-
-        async_dispatcher_send(
-            self.hass,
-            self.async_signal_new_device(device_type),
-            *args,
-        )
+    def async_add_device_callback(self, device_type: str, device=None) -> None:
+        """Add device callback (compatibility placeholder)."""
+        pass
     
     async def connect(self, host: Optional[str], port: Optional[int]) -> bool:
         """Connect to the gateway."""
         if not self.connection or not self.available:
             self.connection = ConnectionManager(self.conn_str(host, port))
-        else:
+        elif self.available:
             await self.connection.close()
 
         await self.connection.connect()
@@ -231,16 +193,13 @@ class BestinGateway:
         """Close the gateway connection."""
         if self.api:
             await self.api.stop()
-        if self.connection and self.available:
+        if self.connection:
             await self.connection.close()
 
     @callback
     async def shutdown(self, event: Event) -> None:
         """Shutdown the gateway."""
-        if self.api:
-            await self.api.stop()
-        if self.connection and self.available:
-            await self.connection.close()
+        await self.async_close()
 
     async def async_start(self) -> None:
         """Start the gateway with the controller."""

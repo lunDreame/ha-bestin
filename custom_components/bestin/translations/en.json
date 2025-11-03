@@ -7,17 +7,103 @@
                     "host": "Host",
                     "port": "Port"
                 },
-                "data_description": {
-                    "port": "Port can be omitted for serial communication."
-                }
+                "description": "Enter the IP address or serial port."
             }
         },
-        "abort": {
-            "single_instance_allowed": "Only a single configuration is allowed."
-        },
         "error": {
-            "connect_failed": "Connection failed.",
-            "unknown": "An unknown error has occurred."
+            "cannot_connect": "Failed to connect",
+            "invalid_host": "Invalid host address",
+            "unknown": "Unexpected error"
+        },
+        "abort": {
+            "already_configured": "Device is already configured"
+        }
+    },
+    "entity": {
+        "climate": {
+            "thermostat": {
+                "name": "Thermostat {room_id}-{device_num}"
+            }
+        },
+        "fan": {
+            "ventilator": {
+                "name": "Ventilator"
+            }
+        },
+        "light": {
+            "light": {
+                "name": "Light {room_id}-{device_num}"
+            },
+            "dimming_light": {
+                "name": "Dimming Light {room_id}-{device_num}"
+            }
+        },
+        "sensor": {
+            "light_power": {
+                "name": "Light Power {room_id}-{device_num}"
+            },
+            "outlet_power": {
+                "name": "Outlet Power {room_id}-{device_num}"
+            },
+            "outlet_cutoff": {
+                "name": "Outlet Cutoff Value {room_id}-{device_num}"
+            },
+            "electric_power": {
+                "name": "Electric Power"
+            },
+            "electric_total": {
+                "name": "Electric Total"
+            },
+            "gas_rate": {
+                "name": "Gas Rate"
+            },
+            "gas_total": {
+                "name": "Gas Total"
+            },
+            "water_rate": {
+                "name": "Water Rate"
+            },
+            "water_total": {
+                "name": "Water Total"
+            },
+            "heat_rate": {
+                "name": "Heat Rate"
+            },
+            "heat_total": {
+                "name": "Heat Total"
+            },
+            "hotwater_rate": {
+                "name": "Hot Water Rate"
+            },
+            "hotwater_total": {
+                "name": "Hot Water Total"
+            },
+            "elevator_direction": {
+                "name": "Elevator Direction"
+            },
+            "elevator_floor": {
+                "name": "Elevator Floor"
+            }
+        },
+        "switch": {
+            "outlet": {
+                "name": "Outlet {room_id}-{device_num}"
+            },
+            "outlet_standby_cutoff": {
+                "name": "Standby Cutoff {room_id}-{device_num}"
+            },
+            "gasvalve": {
+                "name": "Gas Valve"
+            },
+            "doorlock": {
+                "name": "Door Lock"
+            },
+            "elevator": {
+                "name": "Elevator Call"
+            },
+            "batch_switch": {
+                "name": "Batch Off"
+            }
         }
     }
 }

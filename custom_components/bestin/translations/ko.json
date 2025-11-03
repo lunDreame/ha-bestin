@@ -7,17 +7,103 @@
                     "host": "호스트",
                     "port": "포트"
                 },
-                "data_description": {
-                    "port": "직렬 통신인 경우 포트는 생략할 수 있습니다."
-                }
+                "description": "IP 주소 또는 시리얼 포트를 입력하세요."
             }
         },
-        "abort": {
-            "single_instance_allowed": "단일 구성만 가능합니다."
-        },
         "error": {
-            "connect_failed": "연결에 실패하였습니다.",
-            "unknown": "알 수 없는 오류가 발생하였습니다."
+            "cannot_connect": "연결 실패",
+            "invalid_host": "잘못된 호스트 주소",
+            "unknown": "알 수 없는 오류"
+        },
+        "abort": {
+            "already_configured": "이미 등록된 장치입니다"
+        }
+    },
+    "entity": {
+        "climate": {
+            "thermostat": {
+                "name": "온도조절기 {room_id}-{device_num}"
+            }
+        },
+        "fan": {
+            "ventilator": {
+                "name": "환기장치"
+            }
+        },
+        "light": {
+            "light": {
+                "name": "조명 {room_id}-{device_num}"
+            },
+            "dimming_light": {
+                "name": "디밍조명 {room_id}-{device_num}"
+            }
+        },
+        "sensor": {
+            "light_power": {
+                "name": "조명전력 {room_id}-{device_num}"
+            },
+            "outlet_power": {
+                "name": "콘센트전력 {room_id}-{device_num}"
+            },
+            "outlet_cutoff": {
+                "name": "대기전력차단설정 {room_id}-{device_num}"
+            },
+            "electric_power": {
+                "name": "전기 실시간"
+            },
+            "electric_total": {
+                "name": "전기 누적"
+            },
+            "gas_rate": {
+                "name": "가스 실시간"
+            },
+            "gas_total": {
+                "name": "가스 누적"
+            },
+            "water_rate": {
+                "name": "수도 실시간"
+            },
+            "water_total": {
+                "name": "수도 누적"
+            },
+            "heat_rate": {
+                "name": "난방 실시간"
+            },
+            "heat_total": {
+                "name": "난방 누적"
+            },
+            "hotwater_rate": {
+                "name": "온수 실시간"
+            },
+            "hotwater_total": {
+                "name": "온수 누적"
+            },
+            "elevator_direction": {
+                "name": "엘리베이터 방향"
+            },
+            "elevator_floor": {
+                "name": "엘리베이터 층"
+            }
+        },
+        "switch": {
+            "outlet": {
+                "name": "콘센트 {room_id}-{device_num}"
+            },
+            "outlet_standby_cutoff": {
+                "name": "대기전력차단 {room_id}-{device_num}"
+            },
+            "gasvalve": {
+                "name": "가스밸브"
+            },
+            "doorlock": {
+                "name": "현관문"
+            },
+            "elevator": {
+                "name": "엘리베이터 호출"
+            },
+            "batch_switch": {
+                "name": "일괄소등"
+            }
         }
     }
 }
