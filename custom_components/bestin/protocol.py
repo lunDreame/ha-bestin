@@ -389,6 +389,8 @@ class BestinProtocol:
                 0x20: ElevatorState.MOVING_UP
             }.get(elev_byte, ElevatorState.IDLE)
             
+            if direction != ElevatorState.IDLE:
+                devices.append(self._create_device_state(DeviceType.ELEVATOR, 0, 0, True))
             devices.extend([
                 self._create_device_state(DeviceType.ELEVATOR, 0, 0, direction, DeviceSubType.DIRECTION),
                 self._create_device_state(DeviceType.BATCHSWITCH, 0, 0, packet[8] != 0x02),
@@ -396,6 +398,7 @@ class BestinProtocol:
         
         elif pkt_len == 0x13 and pkt_type == 0x13:
             if packet[11] == 0x04:
+                devices.append(self._create_device_state(DeviceType.ELEVATOR, 0, 0, False))
                 devices.append(self._create_device_state(DeviceType.ELEVATOR, 0, 0, ElevatorState.ARRIVED, DeviceSubType.DIRECTION))
             
             if packet[12] != 0xFF:

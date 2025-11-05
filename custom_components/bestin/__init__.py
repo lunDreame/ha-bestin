@@ -22,6 +22,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         await gateway.async_close()
         hass.data[DOMAIN].pop(entry.entry_id)
+        return False
     
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, gateway.shutdown))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

@@ -351,12 +351,13 @@ class BestinController:
     async def _process_buffer(self):
         """Process packet buffer."""
         while len(self._buffer) >= 4:
-            try:
-                start_idx = self._buffer.index(0x02)
-                self._buffer = self._buffer[start_idx:]
-            except ValueError:
-                self._buffer.clear()
-                break
+            if self._buffer[0] != 0x02:
+                try:
+                    start_idx = self._buffer.index(0x02)
+                    self._buffer = self._buffer[start_idx:]
+                except ValueError:
+                    self._buffer.clear()
+                    break
             
             if len(self._buffer) < 3:
                 break
@@ -373,7 +374,7 @@ class BestinController:
             self._buffer = self._buffer[length:]
             
             if not verify_checksum(packet):
-                LOGGER.warning("Checksum error: %s", packet.hex(" "))
+                #LOGGER.warning("Checksum error: %s", packet.hex(" "))
                 continue
             
             LOGGER.debug("RX: %s", packet.hex(" "))
