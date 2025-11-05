@@ -15,6 +15,7 @@ from homeassistant.components.climate.const import HVACMode
 from .const import (
     LOGGER,
     DOMAIN,
+    NEW_BINARY_SENSOR,
     NEW_CLIMATE,
     NEW_FAN,
     NEW_LIGHT,
@@ -23,8 +24,9 @@ from .const import (
     DeviceType,
     DeviceSubType,
     FanMode,
+    IntercomType,
 )
-from .protocol import BestinProtocol, DeviceState, verify_checksum
+from .protocol import BestinProtocol, DeviceState, verify_checksum, verify_intercom_checksum
 
 
 class BestinController:
@@ -67,6 +69,9 @@ class BestinController:
         self._last_spin_code: int = 0
         self._command_timeout: float = 2.0
         self._max_retries: int = 3
+        
+        self._intercom_auto_open: dict[int, bool] = {}
+        self._intercom_opening: dict[int, bool] = {}
 
     async def start(self):
         """Start the controller tasks."""
@@ -202,10 +207,21 @@ class BestinController:
             if "direction" in kwargs else {},
             DeviceType.BATCHSWITCH: lambda: {"state": kwargs.get("turn_on", False)} 
             if "turn_on" in kwargs else {},
+            DeviceType.INTERCOM: lambda: self._build_intercom_expected_state(kwargs),
         }
         
         builder = state_builders.get(device_type)
         return builder() if builder else {}
+    
+    def _build_intercom_expected_state(self, kwargs: dict) -> dict[str, Any]:
+        """Build expected state for intercom commands."""
+        if kwargs.get("disable_schedule"):
+            return {"state": False}
+        elif kwargs.get("enable_schedule"):
+            return {"state": True}
+        elif kwargs.get("open_door"):
+            return {"state": True}
+        return {}
     
     def _build_packet(self, command: dict) -> bytearray | None:
         """Build command packet."""
@@ -223,6 +239,7 @@ class BestinController:
             DeviceType.DOORLOCK: lambda: self.protocol.build_doorlock_packet(**kwargs),
             DeviceType.ELEVATOR: lambda: self.protocol.build_elevator_packet(**kwargs),
             DeviceType.BATCHSWITCH: lambda: self.protocol.build_batchswitch_packet(**kwargs),
+            DeviceType.INTERCOM: lambda: self._build_intercom_packet(index, **kwargs),
         }
         
         try:
@@ -231,6 +248,59 @@ class BestinController:
         except Exception as ex:
             LOGGER.error("Packet build error for %s: %s", device_type, ex, exc_info=True)
             return None
+    
+    def _build_intercom_packet(self, entrance_type: int, **kwargs) -> bytearray | None:
+        """Build intercom control packet and manage state."""
+        intercom_type = IntercomType(entrance_type)
+        
+        if kwargs.get("enable_schedule"):
+            self._intercom_auto_open[entrance_type] = True
+            return None
+        elif kwargs.get("disable_schedule"):
+            self._intercom_auto_open[entrance_type] = False
+            return None
+        
+        elif kwargs.get("open_door"):
+            if intercom_type == IntercomType.HOME and not self._intercom_opening.get(entrance_type):
+                self._intercom_opening[entrance_type] = True
+                self.hass.loop.call_later(
+                    3.0,
+                    lambda: asyncio.create_task(self._send_intercom_door_open(entrance_type))
+                )
+                return self.protocol.build_intercom_packet(intercom_type, force_view=True)
+            else:
+                self._intercom_opening[entrance_type] = True
+                return self.protocol.build_intercom_packet(intercom_type, open_door=True)
+        
+        return None
+    
+    async def _send_intercom_door_open(self, entrance_type: int):
+        """Send door open packet after force view."""
+        try:
+            intercom_type = IntercomType(entrance_type)
+            packet = self.protocol.build_intercom_packet(intercom_type, open_door=True)
+            if packet:
+                await self._send_packet(packet)
+                
+                self.hass.loop.call_later(
+                    2.0,
+                    lambda: self._turn_off_intercom_switch(entrance_type)
+                )
+        except Exception as ex:
+            LOGGER.error("Failed to send intercom door open: %s", ex)
+            self._intercom_opening[entrance_type] = False
+    
+    def _turn_off_intercom_switch(self, entrance_type: int):
+        """Turn off intercom manual open switch after door opens."""
+        try:
+            self._intercom_opening[entrance_type] = False
+            
+            sub_type = DeviceSubType.HOME_ENTRANCE if entrance_type == IntercomType.HOME else DeviceSubType.COMMON_ENTRANCE
+            device_id = self.make_device_id(DeviceType.INTERCOM, 0, entrance_type, sub_type)
+            
+            self.update_device_state(device_id, {"state": False})
+        except Exception as ex:
+            LOGGER.error("Failed to turn off intercom switch: %s", ex)
     
     def _verify_command_success(self, device_id: str, received_state: dict[str, Any]) -> None:
         """Verify if command was successful by comparing states."""
@@ -362,6 +432,19 @@ class BestinController:
             if len(self._buffer) < 3:
                 break
             
+            if len(self._buffer) >= 10 and self._buffer[9] == 0x03:
+                packet = bytes(self._buffer[:10])
+                if verify_intercom_checksum(packet):
+                    self._buffer = self._buffer[10:]
+                    LOGGER.debug("RX (Intercom): %s", packet.hex(" "))
+                    
+                    try:
+                        for device_state in self.protocol.parse_packet(packet):
+                            await self._handle_device_state(device_state)
+                    except Exception as ex:
+                        LOGGER.error("Parse error for intercom packet %s: %s", packet.hex(" "), ex, exc_info=True)
+                    continue
+            
             header, length = self._buffer[1], self._buffer[2]
             
             if header in [0x15, 0x17] or length in [0x00, 0x02, 0x15] or (length >> 4 == 0x08):
@@ -398,6 +481,10 @@ class BestinController:
         if device_state.device_type == DeviceType.ENERGY:
             return await self._handle_energy_state(device_state)
         
+        if device_state.device_type == DeviceType.INTERCOM:
+            await self._handle_intercom_event(device_state)
+            return
+        
         device_id = self.make_device_id(
             device_state.device_type, device_state.room_id, device_state.device_index, device_state.sub_type
         )
@@ -407,6 +494,54 @@ class BestinController:
         
         if not self._is_device_registered(device_id):
             self._dispatch_new_device(device_state)
+    
+    async def _handle_intercom_event(self, device_state: DeviceState):
+        """Handle intercom doorbell event."""
+        entrance_type = device_state.device_index
+        
+        sensor_id = self.make_device_id(
+            DeviceType.INTERCOM, 0, entrance_type, device_state.sub_type
+        )
+        
+        self.update_device_state(sensor_id, {"state": True})
+        
+        if not self._is_device_registered(sensor_id):
+            self._dispatch_new_device(device_state)
+        
+        self.hass.loop.call_later(2.0, lambda: self.update_device_state(sensor_id, {"state": False}))
+        
+        if self._intercom_auto_open.get(entrance_type, False):
+            LOGGER.info("Auto-opening %s entrance (scheduled)", "home" if entrance_type == IntercomType.HOME else "common")
+            manual_sub_type = DeviceSubType.HOME_ENTRANCE if entrance_type == IntercomType.HOME else DeviceSubType.COMMON_ENTRANCE
+            await self.send_command(
+                DeviceType.INTERCOM, 0, entrance_type, manual_sub_type, open_door=True
+            )
+        
+        manual_sub_type = DeviceSubType.HOME_ENTRANCE if entrance_type == IntercomType.HOME else DeviceSubType.COMMON_ENTRANCE
+        manual_switch_id = self.make_device_id(DeviceType.INTERCOM, 0, entrance_type, manual_sub_type)
+        
+        if manual_switch_id not in self.entity_groups.get("switchs", set()):
+            manual_switch_state = DeviceState(
+                device_type=DeviceType.INTERCOM,
+                room_id=0,
+                device_index=entrance_type,
+                state=False,
+                sub_type=manual_sub_type,
+            )
+            self._dispatch_new_device(manual_switch_state)
+        
+        schedule_sub_type = DeviceSubType.HOME_ENTRANCE_SCHEDULE if entrance_type == IntercomType.HOME else DeviceSubType.COMMON_ENTRANCE_SCHEDULE
+        schedule_switch_id = self.make_device_id(DeviceType.INTERCOM, 0, entrance_type, schedule_sub_type)
+        
+        if schedule_switch_id not in self.entity_groups.get("switchs", set()):
+            schedule_switch_state = DeviceState(
+                device_type=DeviceType.INTERCOM,
+                room_id=0,
+                device_index=entrance_type,
+                state=self._intercom_auto_open.get(entrance_type, False),
+                sub_type=schedule_sub_type,
+            )
+            self._dispatch_new_device(schedule_switch_state)
     
     async def _handle_energy_state(self, device_state: DeviceState):
         """Handle energy device state."""
@@ -440,6 +575,7 @@ class BestinController:
     def _is_device_registered(self, device_id: str) -> bool:
         """Check if device is already registered."""
         return device_id in (
+            self.entity_groups.get("binary_sensors", set()) |
             self.entity_groups.get("climates", set()) |
             self.entity_groups.get("fans", set()) |
             self.entity_groups.get("lights", set()) |
@@ -449,7 +585,21 @@ class BestinController:
     
     def _dispatch_new_device(self, device_state: DeviceState):
         """Dispatch new device discovery."""
-        # Check if this is a sensor-type sub_type (power usage, cutoff value, etc.)
+        if device_state.device_type == DeviceType.INTERCOM:
+            if device_state.attributes and device_state.attributes.get("event") == "doorbell":
+                signal = NEW_BINARY_SENSOR
+                entity_group = "binary_sensors"
+            else:
+                signal = NEW_SWITCH
+                entity_group = "switchs"
+            
+            device_id = self.make_device_id(
+                device_state.device_type, device_state.room_id, device_state.device_index, device_state.sub_type
+            )
+            self.entity_groups.setdefault(entity_group, set()).add(device_id)
+            dispatcher.async_dispatcher_send(self.hass, f"{DOMAIN}_{signal}_{self.host}", device_state)
+            return
+        
         if device_state.sub_type in [
             DeviceSubType.POWER_USAGE,
             DeviceSubType.CUTOFF_VALUE,
@@ -457,7 +607,6 @@ class BestinController:
             DeviceSubType.FLOOR
         ]:
             signal = NEW_SENSOR
-        # Check device type for main entities
         elif device_state.device_type == DeviceType.THERMOSTAT:
             signal = NEW_CLIMATE
         elif device_state.device_type == DeviceType.VENTILATION:

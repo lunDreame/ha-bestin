@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, DeviceType, DeviceSubType, ElevatorState
+from .const import DOMAIN, DeviceType, DeviceSubType, ElevatorState, IntercomType
 from .entity_descriptions import SWITCH_DESCRIPTIONS
 from .device import BestinDevice
 from .gateway import BestinGateway
@@ -46,6 +46,20 @@ class BestinSwitch(BestinDevice, SwitchEntity):
             SWITCH_DESCRIPTIONS[0]
         )
         super().__init__(gateway, device_state)
+        
+        if self.device_type == DeviceType.INTERCOM:
+            if self.sub_type == DeviceSubType.HOME_ENTRANCE:
+                self._attr_name = "세대현관 열기"
+                self._attr_translation_key = "intercom_home_open"
+            elif self.sub_type == DeviceSubType.HOME_ENTRANCE_SCHEDULE:
+                self._attr_name = "세대현관 열림 예약"
+                self._attr_translation_key = "intercom_home_schedule"
+            elif self.sub_type == DeviceSubType.COMMON_ENTRANCE:
+                self._attr_name = "공동현관 열기"
+                self._attr_translation_key = "intercom_common_open"
+            elif self.sub_type == DeviceSubType.COMMON_ENTRANCE_SCHEDULE:
+                self._attr_name = "공동현관 열림 예약"
+                self._attr_translation_key = "intercom_common_schedule"
     
     @property
     def is_on(self) -> bool:
@@ -55,6 +69,17 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
+        if self.device_type == DeviceType.INTERCOM:
+            if self.sub_type in [DeviceSubType.HOME_ENTRANCE_SCHEDULE, DeviceSubType.COMMON_ENTRANCE_SCHEDULE]:
+                await self.gateway.api.send_command(
+                    self.device_type, self.room_id, self.device_index, self.sub_type, enable_schedule=True
+                )
+            else:
+                await self.gateway.api.send_command(
+                    self.device_type, self.room_id, self.device_index, self.sub_type, open_door=True
+                )
+            return
+        
         commands = {
             DeviceType.OUTLET: {"turn_on": True} \
                 if self.sub_type != DeviceSubType.STANDBY_CUTOFF else {"standby_cutoff": True},
@@ -70,6 +95,13 @@ class BestinSwitch(BestinDevice, SwitchEntity):
     
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
+        if self.device_type == DeviceType.INTERCOM:
+            if self.sub_type in [DeviceSubType.HOME_ENTRANCE_SCHEDULE, DeviceSubType.COMMON_ENTRANCE_SCHEDULE]:
+                await self.gateway.api.send_command(
+                    self.device_type, self.room_id, self.device_index, self.sub_type, disable_schedule=True
+                )
+            return
+        
         commands = {
             DeviceType.OUTLET: {"turn_on": False} \
                 if self.sub_type != DeviceSubType.STANDBY_CUTOFF else {"standby_cutoff": False},

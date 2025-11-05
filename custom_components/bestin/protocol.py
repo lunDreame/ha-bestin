@@ -14,6 +14,7 @@ from .const import (
     FanMode,
     ElevatorState,
     EnergyType,
+    IntercomType,
 )
 
 
@@ -26,9 +27,40 @@ def calculate_checksum(packet: bytearray | bytes) -> int:
     return checksum
 
 
+def calculate_intercom_checksum(packet: bytearray | bytes, include_end: bool = False) -> int:
+    """Calculate intercom protocol checksum (XOR only)."""
+    checksum = 0
+    for byte in packet:
+        checksum ^= byte
+    if include_end:
+        checksum ^= 0x03
+    return checksum
+
+
 def verify_checksum(packet: bytes) -> bool:
     """Verify packet checksum."""
     return len(packet) >= 4 and calculate_checksum(packet[:-1]) == packet[-1]
+
+
+def verify_intercom_checksum(packet: bytes) -> bool:
+    """Verify intercom packet checksum."""
+    if len(packet) != 10 or packet[0] != 0x02 or packet[-1] != 0x03:
+        return False
+    
+    header = packet[1]
+    cmd = packet[3]
+    expected = packet[-2]
+    
+    if header == 0x00 and cmd == 0x01:
+        data = packet[:-2] + packet[-1:]
+        calculated = calculate_intercom_checksum(data, include_end=False)
+    elif header == 0x01:
+        data = packet[1:-2] + packet[-1:]
+        calculated = calculate_intercom_checksum(data, include_end=False)
+    else:
+        data = packet[:-2]
+        calculated = calculate_intercom_checksum(data, include_end=False)
+    return calculated == expected
 
 
 def make_packet(header: int, length: int, pkt_type: int, spin: int = 0) -> bytearray:
@@ -221,10 +253,33 @@ class BestinProtocol:
         packet[6:11] = [0x01, 0x00, 0x02, 0x01, 0x02]
         return finalize_packet(packet)
     
+    def build_intercom_packet(self, entrance_type: IntercomType, *, open_door: bool = False, force_view: bool = False) -> bytearray:
+        """Build intercom control packet."""
+        type_byte = 0x01 if entrance_type == IntercomType.HOME else 0x02
+        
+        if force_view and entrance_type == IntercomType.HOME:
+            packet = bytearray([0x02, 0x01, 0x02, 0x05, type_byte, 0x00, 0x00, 0x00])
+            data = packet[1:] + bytearray([0x03])
+            checksum = calculate_intercom_checksum(data, include_end=False)
+        elif open_door:
+            packet = bytearray([0x02, 0x00, 0x02, 0x08, type_byte, 0x00, 0x00, 0x00])
+            checksum = calculate_intercom_checksum(packet, include_end=False)
+        else:
+            packet = bytearray([0x02, 0x00, 0x01, 0x11, type_byte, 0x00, 0x00, 0x00])
+            checksum = calculate_intercom_checksum(packet, include_end=False)
+        
+        packet.append(checksum)
+        packet.append(0x03)
+        return packet
+    
     def parse_packet(self, packet: bytes) -> list[DeviceState]:
         """Parse packet and return device states."""
         if len(packet) < 4:
             return []
+        
+        if len(packet) == 10 and packet[0] == 0x02 and packet[-1] == 0x03:
+            if packet[1] in [0x00, 0x01, 0x02] and packet[2] in [0x01, 0x02]:
+                return self._parse_intercom(packet)
         
         header = packet[1]
         packet_len = len(packet)
@@ -528,4 +583,43 @@ class BestinProtocol:
             )
             idx += 8
 
+        return devices
+    
+    def _parse_intercom(self, packet: bytes) -> list[DeviceState]:
+        """Parse intercom (subphone) packet."""
+        if not verify_intercom_checksum(packet):
+            LOGGER.debug("Invalid intercom checksum: %s", packet.hex(" "))
+            return []
+        
+        header = packet[1]
+        cmd = packet[3]
+        entrance_type_byte = packet[4]
+        
+        if entrance_type_byte == 0x01:
+            entrance_type = IntercomType.HOME
+            sub_type = DeviceSubType.HOME_ENTRANCE
+        elif entrance_type_byte == 0x02:
+            entrance_type = IntercomType.COMMON
+            sub_type = DeviceSubType.COMMON_ENTRANCE
+        else:
+            LOGGER.debug("Unknown intercom entrance type: 0x%02X", entrance_type_byte)
+            return []
+        
+        devices = []
+        
+        if cmd == 0x01 and header == 0x00:
+            LOGGER.info("Intercom doorbell pressed: %s", "Home" if entrance_type == IntercomType.HOME else "Common")
+            devices.append(
+                self._create_device_state(
+                    DeviceType.INTERCOM,
+                    0,
+                    entrance_type,
+                    True,
+                    sub_type=sub_type,
+                    attributes={"event": "doorbell"}
+                )
+            )
+        elif header == 0x02:
+            pass
+        
         return devices

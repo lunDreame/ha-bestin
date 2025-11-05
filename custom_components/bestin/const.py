@@ -11,6 +11,8 @@ DOMAIN = "bestin"
 VERSION = "2.0.0"
 
 PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.CLIMATE,
     Platform.FAN,
     Platform.LIGHT,
@@ -22,6 +24,7 @@ LOGGER = logging.getLogger(__package__)
 
 DEFAULT_PORT = 8899
 
+NEW_BINARY_SENSOR = "binary_sensors"
 NEW_CLIMATE = "climates"
 NEW_FAN = "fans"
 NEW_LIGHT = "lights"
@@ -41,6 +44,7 @@ class DeviceType(IntEnum):
     ELEVATOR = 8
     GASVALVE = 9
     BATCHSWITCH = 10
+    INTERCOM = 11
 
 
 class DeviceSubType(IntEnum):
@@ -51,6 +55,10 @@ class DeviceSubType(IntEnum):
     STANDBY_CUTOFF = 3
     DIRECTION = 4
     FLOOR = 5
+    COMMON_ENTRANCE = 6
+    HOME_ENTRANCE = 7
+    COMMON_ENTRANCE_SCHEDULE = 8
+    HOME_ENTRANCE_SCHEDULE = 9
 
 
 class ThermostatMode(IntEnum):
@@ -83,3 +91,9 @@ class EnergyType(IntEnum):
     HOTWATER = 0x03
     GAS = 0x04
     HEAT = 0x05
+
+
+class IntercomType(IntEnum):
+    """Intercom entrance types."""
+    HOME = 1
+    COMMON = 2

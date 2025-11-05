@@ -17,7 +17,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     gateway = BestinGateway(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = gateway
 
-    if await gateway.connect(None, None):
+    if await asyncio.wait_for(gateway.connect(None, None), timeout=5):
         await gateway.async_start()
     else:
         await gateway.async_close()

@@ -20,6 +20,14 @@
         }
     },
     "entity": {
+        "binary_sensor": {
+            "intercom_home_doorbell": {
+                "name": "Home Entrance Doorbell"
+            },
+            "intercom_common_doorbell": {
+                "name": "Common Entrance Doorbell"
+            }
+        },
         "climate": {
             "thermostat": {
                 "name": "Thermostat {room_id}-{device_num}"
@@ -106,6 +114,18 @@
             },
             "batch_switch": {
                 "name": "Batch Off"
+            },
+            "intercom_home_open": {
+                "name": "Home Entrance Open"
+            },
+            "intercom_home_schedule": {
+                "name": "Home Entrance Schedule"
+            },
+            "intercom_common_open": {
+                "name": "Common Entrance Open"
+            },
+            "intercom_common_schedule": {
+                "name": "Common Entrance Schedule"
             }
         }
     }

@@ -20,6 +20,14 @@
         }
     },
     "entity": {
+        "binary_sensor": {
+            "intercom_home_doorbell": {
+                "name": "세대현관 벨"
+            },
+            "intercom_common_doorbell": {
+                "name": "공동현관 벨"
+            }
+        },
         "climate": {
             "thermostat": {
                 "name": "온도조절기 {room_id}-{device_num}"
@@ -106,6 +114,18 @@
             },
             "batch_switch": {
                 "name": "일괄소등"
+            },
+            "intercom_home_open": {
+                "name": "세대현관 열기"
+            },
+            "intercom_home_schedule": {
+                "name": "세대현관 열림 예약"
+            },
+            "intercom_common_open": {
+                "name": "공동현관 열기"
+            },
+            "intercom_common_schedule": {
+                "name": "공동현관 열림 예약"
             }
         }
     }

@@ -51,18 +51,27 @@ class ConnectionManager:
             raise ValueError("Invalid connection string")
 
     async def connect(self, timeout: int = 5) -> None:
-        """Establish a connection."""
+        """Establish a connection with timeout."""
         try:
             if self.is_serial:
-                self.reader, self.writer = await serial_asyncio.open_serial_connection(
-                    url=self.conn_str, baudrate=9600
+                self.reader, self.writer = await asyncio.wait_for(
+                    serial_asyncio.open_serial_connection(
+                        url=self.conn_str, baudrate=9600
+                    ),
+                    timeout=timeout
                 )
                 LOGGER.info("Serial connection established on %s", self.conn_str)
             elif self.is_socket:
                 host, port = self.conn_str.split(":")
-                self.reader, self.writer = await asyncio.open_connection(host, int(port))
+                self.reader, self.writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, int(port)),
+                    timeout=timeout
+                )
                 LOGGER.info("Socket connection established to %s:%s", host, port)
             self.reconnect_attempts = 0
+        except asyncio.TimeoutError:
+            LOGGER.error("Connection timeout after %ds", timeout)
+            await self.reconnect()
         except Exception as e:
             LOGGER.error("Connection failed: %s", e)
             await self.reconnect()
@@ -100,21 +109,24 @@ class ConnectionManager:
             self.reconnect_attempts = 0
             self.next_attempt_time = None
 
-    async def send(self, packet: bytearray) -> None:
-        """Send a packet."""
+    async def send(self, packet: bytearray, timeout: float = 2.0) -> None:
+        """Send a packet with timeout."""
         try:
             self.writer.write(packet)
-            await self.writer.drain()
+            await asyncio.wait_for(self.writer.drain(), timeout=timeout)
+        except asyncio.TimeoutError:
+            LOGGER.error("Send timeout after %.1fs", timeout)
+            await self.reconnect()
         except Exception as e:
             LOGGER.error("Failed to send: %s", e)
             await self.reconnect()
 
-    async def receive(self, size: int = 256) -> bytes | None:
-        """Receive data."""
+    async def receive(self, size: int = 256, timeout: float = 1.0) -> bytes | None:
+        """Receive data with timeout."""
         try:
-            return await self.reader.read(size)
+            return await asyncio.wait_for(self.reader.read(size), timeout=timeout)
         except asyncio.TimeoutError:
-            pass
+            return None
         except Exception as e:
             LOGGER.error("Failed to receive: %s", e)
             await self.reconnect()
