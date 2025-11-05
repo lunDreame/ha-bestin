@@ -9,7 +9,6 @@ from collections import defaultdict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.const import Platform
 from homeassistant.helpers import dispatcher
 from homeassistant.components.climate.const import HVACMode
 
@@ -49,13 +48,10 @@ class BestinController:
         self.add_device_callback = add_device_callback
         
         self.wallpad_config = {
-            "generation": "unknown",
-            "dimming_version": None,
+            "dimming_generation": False,
             "aio_generation": False,
-            "batch_switch_type": None,
-            "vent_len_variable": False,
-            "support_cooktop": False,
-            "light_outlet_header": 0x31,
+            "batch_switch_header": 0xC1,
+            "room_ventilation": False,
         }
         
         self.protocol = BestinProtocol(self.wallpad_config)
@@ -369,8 +365,6 @@ class BestinController:
             
             if header in [0x15, 0x17] or length in [0x00, 0x02, 0x15] or (length >> 4 == 0x08):
                 length = 10
-            elif header == 0x61 and length == 0x05:
-                length = 10
             
             if len(self._buffer) < length:
                 break
@@ -385,9 +379,9 @@ class BestinController:
             LOGGER.debug("RX: %s", packet.hex(" "))
             
             if len(packet) > 4:
-                self._last_spin_code = packet[4]
+                self._last_spin_code = packet[3] if length == 10 else packet[4]
             
-            self._detect_features(packet)
+            #self._detect_features(packet)
             
             try:
                 for device_state in self.protocol.parse_packet(packet):
@@ -397,29 +391,6 @@ class BestinController:
     
     def _detect_features(self, packet: bytes):
         """Detect wallpad features from packets."""
-        if len(packet) < 2:
-            return
-        
-        header = packet[1]
-        feature_map = {
-            0x15: ("batch_switch_type", 1),
-            0x17: ("batch_switch_type", 2),
-            0x21: ("dimming_version", 2),
-            0x61: ("vent_len_variable", True) if len(packet) > 3 and packet[3] == 0x91 else None,
-        }
-        
-        if header in feature_map and feature_map[header]:
-            key, value = feature_map[header]
-            self.wallpad_config[key] = value
-        
-        if header in range(0x51, 0x56):
-            self.wallpad_config["aio_generation"] = True
-            self.wallpad_config["light_outlet_header"] = 0x50
-        elif header in range(0x30, 0x40) and self.wallpad_config["dimming_version"] is None:
-            self.wallpad_config["dimming_version"] = 1
-        
-        if header == 0x31 and len(packet) >= 4 and packet[3] == 0x21:
-            self.wallpad_config["support_cooktop"] = True
     
     async def _handle_device_state(self, device_state: DeviceState):
         """Handle parsed device state."""
@@ -452,6 +423,7 @@ class BestinController:
             self.update_device_state(device_id, {"state": state_data[value_key]})
             
             if not self._is_device_registered(device_id):
+                self.entity_groups.setdefault("sensors", set()).add(device_id)
                 dispatcher.async_dispatcher_send(
                     self.hass,
                     f"{DOMAIN}_{NEW_SENSOR}_{self.host}",
@@ -467,11 +439,11 @@ class BestinController:
     def _is_device_registered(self, device_id: str) -> bool:
         """Check if device is already registered."""
         return device_id in (
-            self.entity_groups.get(Platform.CLIMATE, set()) |
-            self.entity_groups.get(Platform.FAN, set()) |
-            self.entity_groups.get(Platform.LIGHT, set()) |
-            self.entity_groups.get(Platform.SENSOR, set()) |
-            self.entity_groups.get(Platform.SWITCH, set())
+            self.entity_groups.get("climates", set()) |
+            self.entity_groups.get("fans", set()) |
+            self.entity_groups.get("lights", set()) |
+            self.entity_groups.get("sensors", set()) |
+            self.entity_groups.get("switchs", set())
         )
     
     def _dispatch_new_device(self, device_state: DeviceState):

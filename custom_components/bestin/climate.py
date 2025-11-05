@@ -25,9 +25,17 @@ async def async_setup_entry(
     """Set up Bestin climate platform."""
     gateway: BestinGateway = hass.data[DOMAIN][entry.entry_id]
     
+    @callback
+    def _add_device(ds: DeviceState):
+        device_id = gateway.api.make_device_id(
+            ds.device_type, ds.room_id, ds.device_index, ds.sub_type
+        )
+        if device_id not in gateway.entity_groups.setdefault("climates", set()):
+            gateway.entity_groups["climates"].add(device_id)
+            async_add_entities([BestinClimate(gateway, ds)])
+    
     entry.async_on_unload(
-        async_dispatcher_connect(hass, f"{DOMAIN}_climates_{gateway.host}",
-                                 lambda ds: async_add_entities([BestinClimate(gateway, ds)]))
+        async_dispatcher_connect(hass, f"{DOMAIN}_climates_{gateway.host}", _add_device)
     )
 
 
