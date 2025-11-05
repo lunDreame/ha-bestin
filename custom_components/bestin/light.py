@@ -37,10 +37,6 @@ async def async_setup_entry(
 
 class BestinLight(BestinDevice, LightEntity):
     """Bestin light entity."""
-    
-    _attr_min_color_temp_kelvin = 3000
-    _attr_max_color_temp_kelvin = 5700
-    _color_temp_levels = list(range(3000, 5701, 300))
 
     def __init__(self, gateway: BestinGateway, device_state: DeviceState):
         """Initialize light entity."""
@@ -50,9 +46,11 @@ class BestinLight(BestinDevice, LightEntity):
         ), LIGHT_DESCRIPTIONS[0])
         super().__init__(gateway, device_state)
         
-        if device_state.device_type == DeviceType.DIMMINGLIGHT:
-            self._attr_supported_color_modes = {ColorMode.COLOR_TEMP}
-            self._attr_color_mode = ColorMode.COLOR_TEMP
+        if device_state.device_type == DeviceType.DIMMINGLIGHT and (
+            isinstance(device_state.state, dict) and device_state.state.get("brightness") is not None
+        ):
+            self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+            self._attr_color_mode = ColorMode.BRIGHTNESS
         else:
             self._attr_supported_color_modes = {ColorMode.ONOFF}
             self._attr_color_mode = ColorMode.ONOFF
@@ -77,19 +75,9 @@ class BestinLight(BestinDevice, LightEntity):
                 return round(brightness_val * 2.55)
         return None
     
-    @property
-    def color_temp_kelvin(self) -> int | None:
-        """Return color temperature in Kelvin."""
-        if self.entity_description.supports_color_temp:
-            state = self._get_state()
-            if isinstance(state, dict) and (color_temp_val := state.get("color_temp", 0)) > 0:
-                index = max(0, min((color_temp_val // 10) - 1, len(self._color_temp_levels) - 1))
-                return self._color_temp_levels[index]
-        return None
-    
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on light."""
-        brightness, color_temp = kwargs.get(ATTR_BRIGHTNESS), kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+        brightness = kwargs.get(ATTR_BRIGHTNESS)
         
         if self.device_type == DeviceType.DIMMINGLIGHT:
             cmd_kwargs = {"turn_on": True}

@@ -449,15 +449,21 @@ class BestinController:
     
     def _dispatch_new_device(self, device_state: DeviceState):
         """Dispatch new device discovery."""
-        signal_map = {
-            DeviceType.THERMOSTAT: NEW_CLIMATE,
-            DeviceType.VENTILATION: NEW_FAN,
-            DeviceType.LIGHT: NEW_LIGHT,
-            DeviceType.DIMMINGLIGHT: NEW_LIGHT,
-        }
-        
-        if device_state.device_type in signal_map:
-            signal = signal_map[device_state.device_type]
+        # Check if this is a sensor-type sub_type (power usage, cutoff value, etc.)
+        if device_state.sub_type in [
+            DeviceSubType.POWER_USAGE,
+            DeviceSubType.CUTOFF_VALUE,
+            DeviceSubType.DIRECTION,
+            DeviceSubType.FLOOR
+        ]:
+            signal = NEW_SENSOR
+        # Check device type for main entities
+        elif device_state.device_type == DeviceType.THERMOSTAT:
+            signal = NEW_CLIMATE
+        elif device_state.device_type == DeviceType.VENTILATION:
+            signal = NEW_FAN
+        elif device_state.device_type in [DeviceType.LIGHT, DeviceType.DIMMINGLIGHT]:
+            signal = NEW_LIGHT
         elif device_state.device_type in [
             DeviceType.OUTLET,
             DeviceType.GASVALVE,
@@ -465,12 +471,7 @@ class BestinController:
             DeviceType.ELEVATOR,
             DeviceType.BATCHSWITCH
         ]:
-            signal = NEW_SENSOR if device_state.sub_type in [
-                DeviceSubType.POWER_USAGE,
-                DeviceSubType.CUTOFF_VALUE, 
-                DeviceSubType.DIRECTION,
-                DeviceSubType.FLOOR
-            ] else NEW_SWITCH
+            signal = NEW_SWITCH
         else:
             return
         

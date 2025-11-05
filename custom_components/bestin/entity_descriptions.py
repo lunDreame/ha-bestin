@@ -74,7 +74,7 @@ LIGHT_DESCRIPTIONS: tuple[BestinLightEntityDescription, ...] = (
     BestinLightEntityDescription(
         key="dimming_light",
         translation_key="dimming_light",
-        icon="mdi:lightbulb-on",
+        icon="mdi:lightbulb",
         device_type=DeviceType.DIMMINGLIGHT,
         supports_brightness=True,
         supports_color_temp=True,
@@ -99,6 +99,16 @@ SENSOR_DESCRIPTIONS: tuple[BestinSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
         device_type=DeviceType.LIGHT,
+        sub_type=DeviceSubType.POWER_USAGE,
+    ),
+    BestinSensorEntityDescription(
+        key="dimming_light_power",
+        translation_key="dimming_light_power",
+        icon="mdi:flash",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_type=DeviceType.DIMMINGLIGHT,
         sub_type=DeviceSubType.POWER_USAGE,
     ),
     BestinSensorEntityDescription(
@@ -238,7 +248,7 @@ SWITCH_DESCRIPTIONS: tuple[BestinSwitchEntityDescription, ...] = (
     BestinSwitchEntityDescription(
         key="outlet",
         translation_key="outlet",
-        icon="mdi:power-socket",
+        icon="mdi:power-socket-eu",
         device_type=DeviceType.OUTLET,
     ),
     BestinSwitchEntityDescription(

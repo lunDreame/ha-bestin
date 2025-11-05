@@ -454,7 +454,7 @@ class BestinProtocol:
                 device_type = DeviceType.DIMMINGLIGHT
                 state = {"is_on": is_on, "brightness": brightness}
             else:
-                device_type = DeviceType.LIGHT
+                device_type = DeviceType.DIMMINGLIGHT
                 state = {"is_on": is_on}
             devices.append(self._create_device_state(device_type, room_id, light_num, state))
             
