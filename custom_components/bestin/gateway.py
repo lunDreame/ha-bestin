@@ -158,7 +158,7 @@ class ConnectionManager:
             data = await asyncio.wait_for(self.reader.read(size), timeout=timeout)
             
             if data:
-                LOGGER.debug("RX: %s", data.hex(" "))
+                #LOGGER.debug("RX: %s", data.hex(" "))
                 return data
             elif data == b'':
                 LOGGER.warning("Connection closed by remote")
