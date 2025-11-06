@@ -172,6 +172,8 @@ class BestinController:
                     
                     if not success:
                         LOGGER.error("Send failed for %s", command["device_type"].name)
+                    
+                    await asyncio.sleep(0.15)
                 else:
                     LOGGER.warning("No packet generated for %s", command["device_type"].name)
                 
