@@ -58,7 +58,11 @@ class BestinLight(BestinDevice, LightEntity):
     def _get_state(self) -> dict | bool:
         """Get current state."""
         state = self.gateway.api.get_device_state(self.device_id)
-        return state.get("state") if state else False
+        if not state:
+            return False
+        if "is_on" in state:
+            return state
+        return state.get("state", False)
     
     @property
     def is_on(self) -> bool:

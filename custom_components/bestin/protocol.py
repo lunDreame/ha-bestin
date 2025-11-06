@@ -144,8 +144,7 @@ class BestinProtocol:
             else:
                 packet[5] = room & 0x0F
                 packet[6] = (1 << index) | (0x80 if turn_on else 0x00)
-                if turn_on:
-                    packet[11] = 0x04
+                packet[11] = 0x04 if turn_on else 0x00
         return finalize_packet(packet)
     
     def build_dimming_packet(
@@ -158,6 +157,7 @@ class BestinProtocol:
         
         packet = make_packet(0x30 + room, 0x0E, 0x21, self.spin_code)
         packet[5] = 0x01
+        packet[6] = 0x00
         packet[7] = 0x01 + index
         packet[8] = (0x01 if turn_on else 0x02) if turn_on is not None else 0xFF
         packet[9] = (brightness & 0xFF) if brightness is not None else 0xFF
@@ -180,20 +180,28 @@ class BestinProtocol:
             else:
                 packet[5] = room & 0x0F
         else:
-            packet = make_packet(0x31, 0x0D, 0x01, self.spin_code)
             cmd = 0x01 if turn_on else 0x02
             
             if is_dimming:
-                packet[1:4] = [0x30 + room, 0x09, 0x22]
-                packet[5:8] = [0x01, (index + 1) & 0x0F, cmd]
+                packet = make_packet(0x30 + room, 0x09, 0x22, self.spin_code)
+                packet[5] = 0x01
+                packet[6] = (index + 1) & 0x0F
+                packet[7] = cmd if standby_cutoff is None else (cmd * 0x10)
             elif is_aio:
-                packet[1:4] = [0x50 + room, 0x0C, 0x12]
-                packet[8:11] = [0x01, (index + 1) & 0x0F, cmd if standby_cutoff is None else cmd << 4]
+                packet = make_packet(0x50 + room, 0x0C, 0x12, self.spin_code)
+                packet[8] = 0x01
+                packet[9] = (index + 1) & 0x0F
+                packet[10] = (cmd << 4) if standby_cutoff is not None else cmd
             else:
+                packet = make_packet(0x31, 0x0D, 0x01, self.spin_code)
                 packet[5] = room & 0x0F
-                if turn_on:
-                    packet[7] = (1 << index) | 0x80
-                    packet[11] = 0x09 << index
+                if standby_cutoff is not None:
+                    packet[8] = 0x83 if turn_on else 0x03
+                else:
+                    position_flag = 0x80 if turn_on else 0x00
+                    packet[7] = (1 << index) | position_flag
+                    if turn_on:
+                        packet[11] = 0x09 << index
         
         return finalize_packet(packet)
     

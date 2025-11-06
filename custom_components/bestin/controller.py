@@ -66,7 +66,7 @@ class BestinController:
         
         self._last_spin_code: int = 0
         self._command_timeout: float = 2.0
-        self._max_retries: int = 5
+        self._max_retries: int = 3
         
         self._intercom_auto_open: dict[int, bool] = {}
         self._intercom_opening: dict[int, bool] = {}
@@ -204,8 +204,11 @@ class BestinController:
                 {"brightness": kwargs.get("brightness")} 
                 if "brightness" in kwargs else {}
             ),
-            DeviceType.OUTLET: lambda: {"state": kwargs.get("turn_on") or kwargs.get("standby_cutoff")} 
-            if "turn_on" in kwargs or "standby_cutoff" in kwargs else {},
+            DeviceType.OUTLET: lambda: (
+                {"state": kwargs.get("turn_on")} if "turn_on" in kwargs 
+                else {"state": kwargs.get("standby_cutoff")} if "standby_cutoff" in kwargs 
+                else {}
+            ),
             DeviceType.VENTILATION: lambda: {"is_on": kwargs["fan_mode"] != FanMode.OFF, "fan_mode": kwargs["fan_mode"]} 
             if "fan_mode" in kwargs else {},
             DeviceType.GASVALVE: lambda: {"state": not kwargs.get("close", False)} 
@@ -327,7 +330,7 @@ class BestinController:
             LOGGER.debug("Command verified: %s", device_id)
             del self._pending_commands[device_id]
         else:
-            LOGGER.debug("State mismatch for %s: expected %s, got %s", 
+            LOGGER.debug("Waiting for state change: %s (expected: %s, got: %s)", 
                         device_id, expected, received_state)
     
     def _states_match(self, expected: dict, received: dict) -> bool:
