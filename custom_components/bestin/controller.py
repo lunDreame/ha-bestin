@@ -39,7 +39,6 @@ class BestinController:
         entity_groups: dict[str, set[str]],
         host: str,
         connection,
-        add_device_callback: Callable,
     ) -> None:
         """Initialize the BestinController."""
         self.hass = hass
@@ -47,7 +46,6 @@ class BestinController:
         self.entity_groups = entity_groups
         self.host = host
         self.connection = connection
-        self.add_device_callback = add_device_callback
         
         self.wallpad_config = {
             "dimming_generation": False,
@@ -435,7 +433,7 @@ class BestinController:
                         LOGGER.error("Parse error for intercom packet %s: %s", packet.hex(" "), ex, exc_info=True)
                     continue
             
-            header, length = self._buffer[1], self._buffer[2]
+            length = self._buffer[2]
             
             if len(self._buffer) < length:
                 break
@@ -443,20 +441,12 @@ class BestinController:
             packet = bytes(self._buffer[:length])
             
             if verify_checksum(packet):
-                self._buffer = self._buffer[length:]
-                #LOGGER.debug("RX: %s", packet.hex(" "))
-                
-                if len(packet) > 4:
-                    self._last_spin_code = packet[4]
+                self._buffer = self._buffer[length:]                
             else:
                 if length != 10 and len(self._buffer) >= 10:
                     packet = bytes(self._buffer[:10])
                     if verify_checksum(packet):
                         self._buffer = self._buffer[10:]
-                        #LOGGER.debug("RX (retry len=10): %s", packet.hex(" "))
-                        
-                        if len(packet) > 4:
-                            self._last_spin_code = packet[3]
                     else:
                         self._buffer = self._buffer[1:]
                         continue
@@ -469,9 +459,6 @@ class BestinController:
                     await self._handle_device_state(device_state)
             except Exception as ex:
                 LOGGER.error("Parse error for %s: %s", packet.hex(" "), ex, exc_info=True)
-    
-    def _detect_features(self, packet: bytes):
-        """Detect wallpad features from packets."""
     
     async def _handle_device_state(self, device_state: DeviceState):
         """Handle parsed device state."""

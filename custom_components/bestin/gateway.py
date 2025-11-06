@@ -158,7 +158,6 @@ class ConnectionManager:
             data = await asyncio.wait_for(self.reader.read(size), timeout=timeout)
             
             if data:
-                #LOGGER.debug("RX: %s", data.hex(" "))
                 return data
             elif data == b'':
                 LOGGER.warning("Connection closed by remote")
@@ -229,11 +228,6 @@ class BestinGateway:
         if not re.match(r"/dev/tty(USB|AMA)\d+", host):
             return f"{host}:{str(getattr(self, "port", port))}"
         return host
-
-    @callback
-    def async_add_device_callback(self, device_type: str, device=None) -> None:
-        """Add device callback (compatibility placeholder)."""
-        pass
     
     async def connect(self, host: Optional[str], port: Optional[int]) -> bool:
         """Connect to the gateway."""
@@ -265,6 +259,5 @@ class BestinGateway:
             self.entity_groups,
             self.host,
             self.connection,
-            self.async_add_device_callback,
         )
         await self.api.start()
