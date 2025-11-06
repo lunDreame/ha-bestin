@@ -12,7 +12,6 @@ VERSION = "2.0.0"
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
-    Platform.BUTTON,
     Platform.CLIMATE,
     Platform.FAN,
     Platform.LIGHT,

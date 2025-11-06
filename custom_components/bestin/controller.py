@@ -64,11 +64,9 @@ class BestinController:
         self._command_queue: asyncio.Queue = asyncio.Queue()
         self._pending_commands: dict[str, dict[str, Any]] = {}
         
-        self._last_rx_time: float = 0
-        self._last_tx_time: float = 0
         self._last_spin_code: int = 0
         self._command_timeout: float = 2.0
-        self._max_retries: int = 3
+        self._max_retries: int = 5
         
         self._intercom_auto_open: dict[int, bool] = {}
         self._intercom_opening: dict[int, bool] = {}
@@ -151,11 +149,10 @@ class BestinController:
         })
     
     async def _process_command_queue(self):
-        """Process command queue with timing control."""
+        """Process command queue."""
         while True:
             try:
                 command = await self._command_queue.get()
-                await self._wait_for_idle_line()
                 
                 packet = self._build_packet(command)
                 if packet:
@@ -171,7 +168,12 @@ class BestinController:
                         "retry_count": command["retry_count"],
                     }
                     
-                    await self._send_packet(packet)
+                    success = await self.connection.send(packet)
+                    
+                    if not success:
+                        LOGGER.error("Send failed for %s", command["device_type"].name)
+                else:
+                    LOGGER.warning("No packet generated for %s", command["device_type"].name)
                 
                 self._command_queue.task_done()
                 
@@ -186,15 +188,22 @@ class BestinController:
         device_type, kwargs = command["device_type"], command["kwargs"]
         
         state_builders = {
-            DeviceType.THERMOSTAT: lambda: {
-                k: (HVACMode.HEAT if v else HVACMode.OFF) if k == "mode" else v
-                for k, v in kwargs.items() if k in ["mode", "temperature"]
-            } | ({"hvac_mode": HVACMode.HEAT if kwargs.get("mode") else HVACMode.OFF} if "mode" in kwargs else {}),
-            
+            DeviceType.THERMOSTAT: lambda: (
+                {"hvac_mode": HVACMode.HEAT if kwargs.get("mode") else HVACMode.OFF} 
+                if "mode" in kwargs else {}
+            ) | (
+                {"target_temperature": kwargs["temperature"]} 
+                if "temperature" in kwargs else {}
+            ),
             DeviceType.LIGHT: lambda: {"state": kwargs.get("turn_on", True)} 
             if "turn_on" in kwargs else {},
-            DeviceType.DIMMINGLIGHT: lambda: {"state": {"is_on": kwargs.get("turn_on", True)}} 
-            if "turn_on" in kwargs or "brightness" in kwargs else {},
+            DeviceType.DIMMINGLIGHT: lambda: (
+                {"is_on": kwargs.get("turn_on", True)} 
+                if "turn_on" in kwargs else {}
+            ) | (
+                {"brightness": kwargs.get("brightness")} 
+                if "brightness" in kwargs else {}
+            ),
             DeviceType.OUTLET: lambda: {"state": kwargs.get("turn_on") or kwargs.get("standby_cutoff")} 
             if "turn_on" in kwargs or "standby_cutoff" in kwargs else {},
             DeviceType.VENTILATION: lambda: {"is_on": kwargs["fan_mode"] != FanMode.OFF, "fan_mode": kwargs["fan_mode"]} 
@@ -203,7 +212,7 @@ class BestinController:
             if "close" in kwargs else {},
             DeviceType.DOORLOCK: lambda: {"state": not kwargs.get("unlock", False)} 
             if "unlock" in kwargs else {},
-            DeviceType.ELEVATOR: lambda: {"state": kwargs.get("direction")} 
+            DeviceType.ELEVATOR: lambda: {"state": True} 
             if "direction" in kwargs else {},
             DeviceType.BATCHSWITCH: lambda: {"state": kwargs.get("turn_on", False)} 
             if "turn_on" in kwargs else {},
@@ -280,12 +289,16 @@ class BestinController:
             intercom_type = IntercomType(entrance_type)
             packet = self.protocol.build_intercom_packet(intercom_type, open_door=True)
             if packet:
-                await self._send_packet(packet)
-                
-                self.hass.loop.call_later(
-                    2.0,
-                    lambda: self._turn_off_intercom_switch(entrance_type)
-                )
+                success = await self.connection.send(packet)
+                if success:
+                    LOGGER.debug("TX (Intercom door open): %s", packet.hex(" "))
+                    self.hass.loop.call_later(
+                        2.0,
+                        lambda: self._turn_off_intercom_switch(entrance_type)
+                    )
+                else:
+                    LOGGER.error("Failed to send intercom door open")
+                    self._intercom_opening[entrance_type] = False
         except Exception as ex:
             LOGGER.error("Failed to send intercom door open: %s", ex)
             self._intercom_opening[entrance_type] = False
@@ -311,10 +324,11 @@ class BestinController:
         expected = pending["expected_state"]
         
         if not expected or self._states_match(expected, received_state):
-            elapsed = time.time() - pending["timestamp"]
-            retry_info = f" (retry {pending['retry_count']})" if pending['retry_count'] > 0 else ""
-            LOGGER.info("Command success for %s (%.2fs)%s: %s", device_id, elapsed, retry_info, pending["packet"])
+            LOGGER.debug("Command verified: %s", device_id)
             del self._pending_commands[device_id]
+        else:
+            LOGGER.debug("State mismatch for %s: expected %s, got %s", 
+                        device_id, expected, received_state)
     
     def _states_match(self, expected: dict, received: dict) -> bool:
         """Compare expected and received states."""
@@ -348,15 +362,12 @@ class BestinController:
                     if current_time - pending["timestamp"] > self._command_timeout:
                         if pending["retry_count"] < self._max_retries:
                             to_retry.append((device_id, pending))
-                            LOGGER.warning(
-                                "Retry %d/%d for %s: %s",
-                                pending["retry_count"] + 1, self._max_retries, device_id, pending["packet"]
-                            )
+                            LOGGER.warning("Command timeout, retrying %s (%d/%d)", 
+                                          device_id, pending["retry_count"] + 1, self._max_retries)
                         else:
                             to_remove.append(device_id)
-                            LOGGER.error(
-                                "Failed after %d retries for %s: %s", self._max_retries, device_id, pending["packet"]
-                            )
+                            LOGGER.error("Command failed for %s after %d retries", 
+                                        device_id, self._max_retries)
                 
                 for device_id in to_remove:
                     del self._pending_commands[device_id]
@@ -373,31 +384,6 @@ class BestinController:
             except Exception as ex:
                 LOGGER.error("Cleanup error: %s", ex)
     
-    async def _wait_for_idle_line(self):
-        """Wait for line to be idle before sending."""
-        min_idle, max_wait = 0.15, 2.0
-        start = time.time()
-        
-        while time.time() - start < max_wait:
-            if time.time() - self._last_rx_time >= min_idle and time.time() - self._last_tx_time >= min_idle:
-                return
-            await asyncio.sleep(0.05)
-        
-        LOGGER.warning("Idle timeout, forcing transmission")
-    
-    async def _send_packet(self, packet: bytearray):
-        """Send packet with retry."""
-        for attempt in range(2):
-            try:
-                if self.is_alive:
-                    await self.connection.send(packet)
-                    self._last_tx_time = time.time()
-                    LOGGER.debug("TX%s: %s", f" (attempt {attempt + 1})" if attempt else "", packet.hex(" "))
-                    return
-            except Exception as ex:
-                LOGGER.error("TX error (attempt %d): %s", attempt + 1, ex)
-                if attempt < 1:
-                    await asyncio.sleep(0.05)
     
     async def _process_incoming_data(self):
         """Process incoming data from wallpad."""
@@ -409,7 +395,6 @@ class BestinController:
             try:
                 data = await self.connection.receive()
                 if data:
-                    self._last_rx_time = time.time()
                     self._buffer.extend(data)
                     await self._process_buffer()
             except asyncio.CancelledError:
@@ -439,7 +424,7 @@ class BestinController:
                     LOGGER.debug("RX (Intercom): %s", packet.hex(" "))
                     
                     try:
-                        for device_state in self.protocol.parse_packet(packet):
+                        for device_state in self.protocol._parse_intercom(packet):
                             await self._handle_device_state(device_state)
                     except Exception as ex:
                         LOGGER.error("Parse error for intercom packet %s: %s", packet.hex(" "), ex, exc_info=True)
@@ -447,25 +432,32 @@ class BestinController:
             
             header, length = self._buffer[1], self._buffer[2]
             
-            if header in [0x15, 0x17] or length in [0x00, 0x02, 0x15] or (length >> 4 == 0x08):
-                length = 10
-            
             if len(self._buffer) < length:
                 break
             
             packet = bytes(self._buffer[:length])
-            self._buffer = self._buffer[length:]
             
-            if not verify_checksum(packet):
-                #LOGGER.warning("Checksum error: %s", packet.hex(" "))
-                continue
-            
-            LOGGER.debug("RX: %s", packet.hex(" "))
-            
-            if len(packet) > 4:
-                self._last_spin_code = packet[3] if length == 10 else packet[4]
-            
-            #self._detect_features(packet)
+            if verify_checksum(packet):
+                self._buffer = self._buffer[length:]
+                #LOGGER.debug("RX: %s", packet.hex(" "))
+                
+                if len(packet) > 4:
+                    self._last_spin_code = packet[4]
+            else:
+                if length != 10 and len(self._buffer) >= 10:
+                    packet = bytes(self._buffer[:10])
+                    if verify_checksum(packet):
+                        self._buffer = self._buffer[10:]
+                        #LOGGER.debug("RX (retry len=10): %s", packet.hex(" "))
+                        
+                        if len(packet) > 4:
+                            self._last_spin_code = packet[3]
+                    else:
+                        self._buffer = self._buffer[1:]
+                        continue
+                else:
+                    self._buffer = self._buffer[1:]
+                    continue
             
             try:
                 for device_state in self.protocol.parse_packet(packet):

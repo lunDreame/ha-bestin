@@ -277,10 +277,6 @@ class BestinProtocol:
         if len(packet) < 4:
             return []
         
-        if len(packet) == 10 and packet[0] == 0x02 and packet[-1] == 0x03:
-            if packet[1] in [0x00, 0x01, 0x02] and packet[2] in [0x01, 0x02]:
-                return self._parse_intercom(packet)
-        
         header = packet[1]
         packet_len = len(packet)
         self.spin_code = packet[3] if packet_len == 10 else packet[4]
@@ -417,7 +413,6 @@ class BestinProtocol:
             is_on = packet[6]
             speed = packet[8] if is_on else 0
         else:
-            LOGGER.warning("Unexpected ventilator packet: %s", packet.hex(" "))
             return []
         
         fan_mode = {
@@ -543,7 +538,7 @@ class BestinProtocol:
         """Parse gas valve packet."""
         if packet[2] not in [0x80, 0x82]:
             return []
-        return [self._create_device_state(DeviceType.GASVALVE, 0, 0, packet[5])]
+        return [self._create_device_state(DeviceType.GASVALVE, 0, 0, bool(packet[5]))]
     
     def _parse_doorlock(self, packet: bytes) -> list[DeviceState]:
         """Parse doorlock packet."""
@@ -587,10 +582,6 @@ class BestinProtocol:
     
     def _parse_intercom(self, packet: bytes) -> list[DeviceState]:
         """Parse intercom (subphone) packet."""
-        if not verify_intercom_checksum(packet):
-            LOGGER.debug("Invalid intercom checksum: %s", packet.hex(" "))
-            return []
-        
         header = packet[1]
         cmd = packet[3]
         entrance_type_byte = packet[4]
