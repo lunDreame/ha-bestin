@@ -299,7 +299,7 @@ class BestinProtocol:
             return []
         elif header == 0x61:
             return self._parse_ventilator(packet)
-        elif header in [0x31, 0x32, 0x33, 0x34, 0x3F]:
+        elif header in [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x3F]:
             if packet_len == 10:
                 return self._parse_gasvalve(packet)
             elif packet_len in [7, 30]:
@@ -336,7 +336,7 @@ class BestinProtocol:
             },
         )]
     
-    def _create_device_state(self, device_type: DeviceType, room_id: int, index: int, state: Any, sub_type: DeviceSubType = DeviceSubType.NONE, **attrs) -> DeviceState:
+    def _create_device_state(self, device_type: DeviceType, room_id: int, index: int, state: Any, sub_type: DeviceSubType = DeviceSubType.NONE, attributes: dict[str, Any] | None = None) -> DeviceState:
         """Helper to create DeviceState."""
         return DeviceState(
             device_type=device_type,
@@ -344,7 +344,7 @@ class BestinProtocol:
             device_index=index,
             state=state,
             sub_type=sub_type,
-            attributes=attrs if attrs else None,
+            attributes=attributes,
         )
     
     def _parse_light_outlet(self, packet: bytes) -> list[DeviceState]:
@@ -568,6 +568,7 @@ class BestinProtocol:
         energy_names = {1: "electric", 2: "water", 3: "hotwater", 4: "gas", 5: "heat"}
         devices = []
 
+        device_idx_base = 0
         for _ in range(min(count, 5)):
             eid = packet[idx]
             if eid & 0x80:  # not used
@@ -581,9 +582,17 @@ class BestinProtocol:
 
             devices.append(
                 self._create_device_state(
-                    DeviceType.ENERGY, 0, eid & 0x7F, {"total": total, "realtime": realtime}, attributes={"energy_type": name}
+                    DeviceType.ENERGY, 0, device_idx_base, realtime, 
+                    attributes={"energy_type": name, "sensor_type": "power"}
                 )
             )
+            devices.append(
+                self._create_device_state(
+                    DeviceType.ENERGY, 0, device_idx_base + 1, total,
+                    attributes={"energy_type": name, "sensor_type": "total"}
+                )
+            )
+            device_idx_base += 2
             idx += 8
 
         return devices

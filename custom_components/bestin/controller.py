@@ -112,19 +112,10 @@ class BestinController:
         current_state = self.devices[device_id].copy()
         self.devices[device_id].update(state)
         
-        LOGGER.debug(
-            "State update [%s]: %s -> %s (changed: %s)",
-            device_id,
-            current_state if current_state else "None",
-            self.devices[device_id],
-            current_state != self.devices[device_id]
-        )
-        
         if device_id in self._pending_commands:
             self._verify_command_success(device_id, state)
         
         if current_state != self.devices[device_id]:
-            LOGGER.debug("Triggering %d callback(s) for %s", len(self._callbacks.get(device_id, [])), device_id)
             for callback in self._callbacks.get(device_id, []):
                 try:
                     callback()
@@ -464,6 +455,7 @@ class BestinController:
                     self._buffer = self._buffer[1:]
                     continue
             
+            LOGGER.debug("RX: %s", packet.hex(" "))
             try:
                 for device_state in self.protocol.parse_packet(packet):
                     await self._handle_device_state(device_state)
@@ -542,29 +534,17 @@ class BestinController:
         if not device_state.attributes or "energy_type" not in device_state.attributes:
             return
         
-        energy_type = device_state.attributes["energy_type"]
-        state_data = device_state.state
+        device_id = self.make_device_id(DeviceType.ENERGY, 0, device_state.device_index)
+        self.update_device_state(device_id, {"state": device_state.state})
         
-        if not isinstance(state_data, dict) or "total" not in state_data or "realtime" not in state_data:
-            return
-        
-        for sensor_type, value_key in [("power", "realtime"), ("total", "total")]:
-            device_id = f"energy_{energy_type}_{sensor_type}_0_0"
-            self.update_device_state(device_id, {"state": state_data[value_key]})
-            
-            if not self._is_device_registered(device_id):
-                self.entity_groups.setdefault("sensors", set()).add(device_id)
-                dispatcher.async_dispatcher_send(
-                    self.hass,
-                    f"{DOMAIN}_{NEW_SENSOR}_{self.host}",
-                    DeviceState(
-                        device_type=DeviceType.ENERGY,
-                        room_id=0,
-                        device_index=device_state.device_index,
-                        state=state_data,
-                        attributes={"energy_type": energy_type, "sensor_type": sensor_type},
-                    ),
-                )
+        if not self._is_device_registered(device_id):
+            energy_type = device_state.attributes["energy_type"]
+            sensor_type = device_state.attributes.get("sensor_type", "unknown")
+            dispatcher.async_dispatcher_send(
+                self.hass,
+                f"{DOMAIN}_{NEW_SENSOR}_{self.host}",
+                device_state,
+            )
     
     def _is_device_registered(self, device_id: str) -> bool:
         """Check if device is already registered."""
@@ -582,15 +562,9 @@ class BestinController:
         if device_state.device_type == DeviceType.INTERCOM:
             if device_state.attributes and device_state.attributes.get("event") == "doorbell":
                 signal = NEW_BINARY_SENSOR
-                entity_group = "binary_sensors"
             else:
                 signal = NEW_SWITCH
-                entity_group = "switchs"
             
-            device_id = self.make_device_id(
-                device_state.device_type, device_state.room_id, device_state.device_index, device_state.sub_type
-            )
-            self.entity_groups.setdefault(entity_group, set()).add(device_id)
             dispatcher.async_dispatcher_send(self.hass, f"{DOMAIN}_{signal}_{self.host}", device_state)
             return
         

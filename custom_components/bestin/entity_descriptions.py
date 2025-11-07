@@ -226,6 +226,7 @@ SENSOR_DESCRIPTIONS: tuple[BestinSensorEntityDescription, ...] = (
         icon="mdi:elevator",
         device_type=DeviceType.ELEVATOR,
         sub_type=DeviceSubType.DIRECTION,
+        value_fn=lambda x: x.name if hasattr(x, 'name') else str(x),
     ),
     BestinSensorEntityDescription(
         key="elevator_floor",
