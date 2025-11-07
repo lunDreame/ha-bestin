@@ -112,10 +112,19 @@ class BestinController:
         current_state = self.devices[device_id].copy()
         self.devices[device_id].update(state)
         
+        LOGGER.debug(
+            "State update [%s]: %s -> %s (changed: %s)",
+            device_id,
+            current_state if current_state else "None",
+            self.devices[device_id],
+            current_state != self.devices[device_id]
+        )
+        
         if device_id in self._pending_commands:
             self._verify_command_success(device_id, state)
         
         if current_state != self.devices[device_id]:
+            LOGGER.debug("Triggering %d callback(s) for %s", len(self._callbacks.get(device_id, [])), device_id)
             for callback in self._callbacks.get(device_id, []):
                 try:
                     callback()
@@ -400,6 +409,7 @@ class BestinController:
                 if data:
                     self._buffer.extend(data)
                     await self._process_buffer()
+                await asyncio.sleep(0.001)
             except asyncio.CancelledError:
                 break
             except Exception as ex:

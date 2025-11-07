@@ -141,7 +141,6 @@ class ConnectionManager:
         try:
             self.writer.write(packet)
             await asyncio.wait_for(self.writer.drain(), timeout=timeout)
-            LOGGER.debug("TX: %s", packet.hex(" "))
             return True
             
         except Exception as e:

@@ -67,6 +67,7 @@ class BestinDevice(Entity):
         """Return extra state attributes."""
         return {
             "device_type": self.device_type.name.lower(),
+            "sub_type": self.sub_type.name.lower(),
             "room_id": self.room_id,
             "device_index": self.device_index,
         }
@@ -82,4 +83,4 @@ class BestinDevice(Entity):
     @callback
     def _handle_update(self) -> None:
         """Handle device state update."""
-        self.async_write_ha_state()
+        self.async_schedule_update_ha_state()
