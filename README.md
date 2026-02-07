@@ -74,4 +74,4 @@ logger:
 ```
 
 ## 라이선스
-BESTIN 통합은 [Apache License](./LICENSE)를 따릅니다.
+Copyright (c) 2026 lunDreame. All rights reserved.
